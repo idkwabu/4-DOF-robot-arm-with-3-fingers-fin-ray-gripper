@@ -1,0 +1,31 @@
+# Python virtualenv
+.venv/
+venv/
+env/
+
+# Bytecode
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Merged model weights: 1.2 GB, far over GitHub's 100 MB per-file limit.
+# Regenerate with mind/merge_robot.py from the tracked LoRA adapter in
+# mind/dum-e-qwen3-robot/, or retrain with mind/train_robot.py.
+mind/dum-e-qwen3-merged/
+
+# Runtime state written by the app on every run. Machine-specific, not source.
+mind/robot_state.json
+mind/robot_command.json
+robot_state.json
+robot_command.json
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Stray backups
+*.bak
+*.orig
+*.rej

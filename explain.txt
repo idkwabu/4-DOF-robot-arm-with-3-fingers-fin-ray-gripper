@@ -1,0 +1,1222 @@
+PROJECT WALKTHROUGH
+===================
+
+This project is a modular ESP32 robot-arm controller. It separates the system
+into layers:
+
+    Serial / Python / AI command
+            |
+            v
+    CommandParser
+            |
+            v
+    RobotArm safety validation
+            |
+            v
+    Inverse kinematics or joint target generation
+            |
+            v
+    Joint trajectory interpolation
+            |
+            v
+    ESP32Servo PWM output
+            |
+            v
+    Physical servos
+
+The current implementation controls:
+
+1. Base yaw
+2. Shoulder pitch
+3. Elbow pitch
+4. Wrist pitch
+5. Gripper
+
+The Cartesian solver uses the first three joints to calculate XYZ position.
+The wrist is currently held at a fixed configured angle.
+
+
+1. PROJECT FILES
+================
+
+movement.ino
+-----------
+
+This is the Arduino entry point.
+
+    RobotArm robotArm;
+    CommandParser commandParser;
+    String inputLine;
+
+It creates one robot controller and one command parser.
+
+setup()
+-------
+
+    void setup() {
+      Serial.begin(SERIAL_BAUD);
+      inputLine.reserve(128);
+      robotArm.begin();
+    }
+
+This:
+
+1. Starts serial communication at 115200 baud.
+2. Reserves memory for incoming commands.
+3. Initializes the robot arm, servos, emergency-stop input, and home position.
+
+loop()
+------
+
+    void loop() {
+      while (Serial.available() > 0) {
+        ...
+      }
+
+      robotArm.update();
+    }
+
+The loop performs two jobs:
+
+1. Reads complete newline-terminated commands.
+2. Updates servo movement continuously.
+
+It does not use a long blocking movement loop or long delay. That allows the
+ESP32 to keep checking:
+
+- New commands
+- Emergency-stop state
+- Servo trajectory progress
+- Optional feedback sensors
+
+For example, when you send:
+
+    MOVE_JOINT 1 120
+
+the command is stored until the newline is received, then passed to
+CommandParser.
+
+
+2. config.h
+===========
+
+This is the main configuration file. Modify this file during hardware setup
+instead of searching through the rest of the project.
+
+Number of servos
+----------------
+
+    constexpr uint8_t JOINT_COUNT = 4;
+    constexpr uint8_t GRIPPER_INDEX = JOINT_COUNT;
+    constexpr uint8_t SERVO_COUNT = JOINT_COUNT + 1;
+
+The array indexes are:
+
+    Array index  Meaning       User command
+    0            Base          Joint 1
+    1            Shoulder      Joint 2
+    2            Elbow         Joint 3
+    3            Wrist         Joint 4
+    4            Gripper       Internal gripper
+
+The gripper is not treated as a normal Cartesian joint.
+
+Servo signal pins
+-----------------
+
+    constexpr uint8_t JOINT_PINS[SERVO_COUNT] = {
+      13, 14, 25, 26, 27
+    };
+
+The mapping is:
+
+    Servo      GPIO
+    Base       13
+    Shoulder   14
+    Elbow      25
+    Wrist      26
+    Gripper    27
+
+If your wiring is different, change this array.
+
+For example:
+
+    constexpr uint8_t JOINT_PINS[SERVO_COUNT] = {
+      18, 19, 21, 22, 23
+    };
+
+Do not use arbitrary GPIO numbers from an AI command. GPIO assignments remain
+fixed in the firmware.
+
+Logical joint limits
+--------------------
+
+    constexpr float JOINT_MIN_ANGLE[SERVO_COUNT] = {
+      0, 10, 10, -90, 0
+    };
+
+    constexpr float JOINT_MAX_ANGLE[SERVO_COUNT] = {
+      180, 170, 170, 90, 100
+    };
+
+These are logical robot angles.
+
+    Joint      Minimum   Maximum
+    Base       0         180
+    Shoulder   10        170
+    Elbow      10        170
+    Wrist      -90       90
+    Gripper    0         100
+
+The gripper values are treated as percentage-like logical values:
+
+- 0 = closed
+- 100 = open
+
+The actual gripper servo angle is calculated from its configured min/max range.
+
+A command such as:
+
+    MOVE_JOINT 2 200
+
+is rejected because 200 degrees is outside the shoulder limit.
+
+Home positions
+--------------
+
+    constexpr float JOINT_HOME_ANGLE[SERVO_COUNT] = {
+      90, 90, 90, 0, 0
+    };
+
+The home position is:
+
+    Joint      Home
+    Base       90 degrees
+    Shoulder   90 degrees
+    Elbow      90 degrees
+    Wrist      0 degrees
+    Gripper    0 degrees
+
+The command:
+
+    HOME
+
+moves all servos smoothly to this position.
+
+Home is not automatically the physical zero position. It is only the
+configured safe pose.
+
+Calibration offsets
+-------------------
+
+    constexpr float JOINT_OFFSET[SERVO_COUNT] = {
+      0, 0, 0, 0, 0
+    };
+
+The logical angle and the physical servo angle may not match.
+
+For example, suppose:
+
+- The robot logical shoulder angle is 90 degrees.
+- The servo must receive 105 degrees to physically achieve that pose.
+
+Then configure:
+
+    constexpr float JOINT_OFFSET[SERVO_COUNT] = {
+      0, 15, 0, 0, 0
+    };
+
+The firmware converts:
+
+    servo angle = logical angle + offset
+
+Offsets do not bypass safety limits. A logical command must still be inside
+the configured logical range.
+
+Servo pulse range
+-----------------
+
+    constexpr int SERVO_MIN_US = 500;
+    constexpr int SERVO_MAX_US = 2500;
+
+The servo library converts the logical angle to a pulse width between these
+values.
+
+The approximate mapping is:
+
+    0 degrees   -> 500 microseconds
+    180 degrees -> 2500 microseconds
+
+Different servos may require different values. Some servos are safer with:
+
+    constexpr int SERVO_MIN_US = 600;
+    constexpr int SERVO_MAX_US = 2400;
+
+Start conservatively. Incorrect pulse limits can make a servo hit its
+mechanical stop.
+
+Movement speed
+--------------
+
+    constexpr float JOINT_SPEED_DPS[SERVO_COUNT] = {
+      60, 45, 45, 60, 90
+    };
+
+These values are degrees per second.
+
+    Joint      Speed
+    Base       60 degrees/second
+    Shoulder   45 degrees/second
+    Elbow      45 degrees/second
+    Wrist      60 degrees/second
+    Gripper    90 degrees/second
+
+You can change speed during operation:
+
+    SPEED 2 20
+
+This sets joint 2 to 20 degrees/second.
+
+The speed affects the trajectory generator, not the servo PWM frequency.
+
+
+3. Joint.h AND Joint.cpp
+========================
+
+The Joint class represents one servo-controlled joint.
+
+Each joint stores:
+
+    float minAngle_;
+    float maxAngle_;
+    float offset_;
+    float speedDps_;
+    float currentAngle_;
+    float targetAngle_;
+
+These values represent:
+
+- minAngle_: lowest allowed logical angle
+- maxAngle_: highest allowed logical angle
+- offset_: servo calibration offset
+- speedDps_: movement speed
+- currentAngle_: current software-estimated angle
+- targetAngle_: requested destination
+
+Servo initialization
+--------------------
+
+    void Joint::begin(...)
+
+This function:
+
+1. Saves the configuration.
+2. Attaches the servo to its GPIO.
+3. Configures optional analog feedback.
+4. Stores the PWM limits.
+
+The project uses:
+
+    #include <ESP32Servo.h>
+
+This is preferred over the classic Arduino Servo library for ESP32 boards.
+
+Setting a target
+----------------
+
+    void Joint::setTarget(float angle, uint32_t now)
+
+This does not immediately move the servo to the target.
+
+Instead, it stores the target:
+
+    targetAngle_ = constrain(angle, minAngle_, maxAngle_);
+
+The actual movement occurs later through repeated calls to update().
+
+Smooth movement
+---------------
+
+    void Joint::update(uint32_t now)
+
+This is the trajectory generator.
+
+Suppose:
+
+    Current = 30 degrees
+    Target  = 90 degrees
+    Speed   = 60 degrees/second
+
+On every update, the joint calculates:
+
+    elapsed time x speed
+
+For example, after 20 milliseconds:
+
+    60 degrees/second x 0.020 seconds = 1.2 degrees
+
+The servo moves gradually:
+
+    30.0
+    31.2
+    32.4
+    33.6
+    ...
+    90.0
+
+The movement is time-based rather than based on a fixed number of loop
+iterations. This makes it less sensitive to small variations in loop timing.
+
+Servo output conversion
+-----------------------
+
+    void Joint::writeServoAngle(float logicalAngle)
+
+This applies the calibration offset:
+
+    servoAngle = logicalAngle + offset
+
+Then it converts the servo angle to a pulse width:
+
+    pulse =
+      servoMinUs +
+      servoAngle / 180.0 *
+      (servoMaxUs - servoMinUs)
+
+Finally:
+
+    servo_.writeMicroseconds(pulse);
+
+The AI or serial command never directly controls this pulse width. It can only
+provide a validated logical angle.
+
+Stopping a joint
+----------------
+
+    void Joint::stop()
+
+This sets:
+
+    targetAngle_ = currentAngle_;
+
+The servo remains at its current software-estimated position and no longer
+continues toward its previous target.
+
+
+4. RobotArm.h AND RobotArm.cpp
+==============================
+
+RobotArm is the main controller.
+
+It owns all five joints:
+
+    Joint joints_[SERVO_COUNT];
+
+It also owns the robot state:
+
+    enum class ArmState {
+      IDLE,
+      MOVING,
+      STOPPED,
+      TESTING
+    };
+
+Robot states
+------------
+
+IDLE
+----
+
+All joints have reached their targets.
+
+MOVING
+------
+
+At least one joint is moving toward a target.
+
+STOPPED
+-------
+
+A software or physical emergency stop has been activated.
+
+New motion commands are rejected while the stop latch is active.
+
+TESTING
+-------
+
+A joint is being tested at reduced speed.
+
+Robot initialization
+--------------------
+
+    void RobotArm::begin()
+
+This initializes every servo:
+
+    for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+      joints_[i].begin(...);
+      joints_[i].writeLogical(JOINT_HOME_ANGLE[i]);
+    }
+
+This means the firmware starts by writing the configured home pose to the
+servos.
+
+The controller also configures the E-stop input:
+
+    pinMode(ESTOP_PIN, INPUT_PULLUP);
+
+Then it prints:
+
+    READY
+
+and the command help.
+
+Robot update cycle
+------------------
+
+    void RobotArm::update()
+
+This function is called continuously from loop().
+
+It performs the following operations:
+
+1. Read the physical E-stop.
+2. Update every servo trajectory.
+3. Check optional feedback.
+4. Determine whether the robot reached its target.
+5. Print debug status periodically.
+
+The core movement loop is:
+
+    for (uint8_t i = 0; i < SERVO_COUNT; ++i) {
+      joints_[i].update(now);
+    }
+
+Because the updates are small and frequent, the robot moves smoothly without a
+large blocking delay.
+
+
+5. JOINT COMMANDS
+=================
+
+The command:
+
+    MOVE_JOINT 1 90
+
+is processed as follows:
+
+1. CommandParser recognizes MOVE_JOINT.
+2. It parses:
+   - Joint number: 1
+   - Angle: 90
+3. RobotArm::moveJoint() validates the joint number.
+4. It checks whether the stop latch is active.
+5. It checks the configured angle limits.
+6. It stores the target.
+7. The main loop gradually moves the servo.
+
+The result is:
+
+    OK
+
+When the target is reached:
+
+    AT_TARGET
+
+Example commands:
+
+    MOVE_JOINT 1 90
+    MOVE_JOINT 2 60
+    MOVE_JOINT 3 120
+    MOVE_JOINT 4 0
+
+These commands affect only one joint at a time.
+
+
+6. GRIPPER COMMANDS
+===================
+
+The parser accepts:
+
+    GRIP OPEN
+    GRIP CLOSE
+    GRIP 50
+
+These become:
+
+    GRIP OPEN  -> 100 percent
+    GRIP CLOSE -> 0 percent
+    GRIP 50    -> 50 percent
+
+The controller maps the percentage to the gripper's configured logical angle
+range.
+
+For example, if the gripper is configured as:
+
+    JOINT_MIN_ANGLE[4] = 0;
+    JOINT_MAX_ANGLE[4] = 100;
+
+then:
+
+    GRIP 50
+
+produces a logical gripper target of 50.
+
+Values outside the range are rejected:
+
+    GRIP 150
+
+returns:
+
+    ERROR: Gripper percentage must be 0-100
+
+
+7. CARTESIAN MOVEMENT
+=====================
+
+The command:
+
+    MOVE_XYZ 200 50 150
+
+means:
+
+    X = 200 mm
+    Y = 50 mm
+    Z = 150 mm
+
+The coordinate system is:
+
+    X: forward from the base
+    Y: left/right from the base
+    Z: vertical height
+
+The base is assumed to rotate around the vertical Z axis.
+
+Robot geometry
+--------------
+
+Configured in config.h:
+
+    constexpr float BASE_HEIGHT_MM = 80.0f;
+    constexpr float LINK_1_MM = 150.0f;
+    constexpr float LINK_2_MM = 150.0f;
+
+The structure is approximated as:
+
+           Link 2
+          /
+    Elbow
+      |
+    Link 1
+      |
+    Shoulder
+      |
+    Base height
+      |
+    Base yaw
+
+The IK solver calculates a three-joint solution for:
+
+- Base yaw
+- Shoulder pitch
+- Elbow pitch
+
+The wrist is held at:
+
+    constexpr float WRIST_PITCH_DEG = 0.0f;
+
+IK calculation
+--------------
+
+First, the horizontal distance from the base is calculated:
+
+    r = sqrt(x^2 + y^2)
+
+The height relative to the shoulder pivot is:
+
+    h = z - BASE_HEIGHT_MM
+
+The distance from the shoulder to the target is:
+
+    d = sqrt(r^2 + h^2)
+
+The elbow angle uses the law of cosines:
+
+    cos(elbow) =
+      (d^2 - L1^2 - L2^2) /
+      (2 x L1 x L2)
+
+Then:
+
+    elbow = acos(cos(elbow))
+
+The shoulder angle is:
+
+    shoulder =
+      atan2(h, r)
+      -
+      atan2(
+        L2 x sin(elbow),
+        L1 + L2 x cos(elbow)
+      )
+
+The base angle is:
+
+    base = atan2(y, x)
+
+The code converts the mathematical angles into the logical servo conventions:
+
+    base = atan2f(y, x) * 180.0f / PI + 90.0f;
+    shoulder = shoulderRadians * 180.0f / PI + 90.0f;
+    elbow = elbowRadians * 180.0f / PI;
+
+The +90 values depend on how the physical servos are mounted. They may need to
+be changed after calibration.
+
+Workspace safety
+----------------
+
+The controller rejects positions if:
+
+- The coordinates are not valid numbers.
+- The radius is too close to the base.
+- The target is farther than the maximum arm reach.
+- Z is outside the configured vertical range.
+- The resulting joint angles violate joint limits.
+
+Configured workspace limits:
+
+    constexpr float WORKSPACE_MIN_RADIUS_MM = 40.0f;
+    constexpr float WORKSPACE_MAX_RADIUS_MM = LINK_1_MM + LINK_2_MM;
+    constexpr float WORKSPACE_MIN_Z_MM = 20.0f;
+    constexpr float WORKSPACE_MAX_Z_MM = 330.0f;
+
+A failed command returns:
+
+    ERROR: Position unreachable
+
+The current IK solver chooses one elbow configuration. It does not yet support:
+
+- Elbow-up versus elbow-down selection
+- Collision detection
+- Arbitrary wrist orientation
+- Tool-center-point offsets
+- Six-axis industrial robot kinematics
+
+Those require the actual mechanical structure and desired behavior.
+
+
+8. EMERGENCY STOP
+=================
+
+There are two stop mechanisms.
+
+Software stop
+-------------
+
+Send:
+
+    STOP
+
+The controller:
+
+1. Stops every joint target.
+2. Sets the state to STOPPED.
+3. Latches the stop condition.
+4. Rejects new motion commands.
+
+Response:
+
+    STOPPED COMMAND
+
+To clear the software latch:
+
+    RESET_STOP
+
+Response:
+
+    OK RESET_STOP
+
+Physical stop input
+-------------------
+
+The configured pin is:
+
+    constexpr uint8_t ESTOP_PIN = 32;
+
+The input is active-low:
+
+    if (digitalRead(ESTOP_PIN) == LOW) {
+      emergencyStop("PHYSICAL_ESTOP");
+    }
+
+For a simple input test, connect a normally-open pushbutton:
+
+    ESP32 GPIO32 --- pushbutton --- GND
+
+The firmware enables the internal pull-up resistor, so:
+
+    Button released -> HIGH
+    Button pressed  -> LOW
+
+For a real robot, do not rely only on an ESP32 software input. A proper safety
+system should also remove servo power using:
+
+- A safety relay
+- A contactor
+- A servo power disconnect
+- A normally-closed emergency-stop circuit
+
+The ESP32 input can report the stop state, but the hardware safety circuit
+should remove actuator energy independently.
+
+
+9. HOMING
+=========
+
+The command:
+
+    HOME
+
+moves all joints to:
+
+    {90, 90, 90, 0, 0}
+
+The controller does not use limit switches in the current implementation.
+Therefore, this is a software-defined home pose, not a sensor-confirmed
+machine zero.
+
+Before using HOME:
+
+1. Remove the arm links or support them safely.
+2. Set conservative servo limits.
+3. Set servo offsets.
+4. Confirm the pose does not cause mechanical collision.
+5. Test at slow speed.
+
+If a true repeatable home position is required, add:
+
+- Limit switches
+- Hall sensors
+- Absolute encoders
+- Incremental encoders
+- A homing routine with controlled low-speed motion
+
+
+10. TEST MODE
+=============
+
+Test mode is intended for commissioning one joint at a time.
+
+Start test mode:
+
+    TEST JOINT 1
+
+This reduces the selected joint speed to 25 percent:
+
+    SLOW_TEST_SPEED_FACTOR = 0.25f;
+
+Then command test positions:
+
+    J1 30
+    J1 60
+    J1 90
+
+The controller rejects test moves for a different joint:
+
+    TEST JOINT 1
+    J2 90
+
+This prevents accidentally testing another joint while commissioning.
+
+Test mode is useful for finding:
+
+- Servo direction
+- Mechanical zero
+- Safe joint limits
+- Calibration offsets
+- Mechanical interference
+
+
+11. OPTIONAL FEEDBACK
+=====================
+
+Feedback is disabled by default:
+
+    constexpr bool FEEDBACK_ENABLED = false;
+
+The current optional feedback method is an analog potentiometer.
+
+Configure it like this:
+
+    constexpr bool FEEDBACK_ENABLED = true;
+
+    constexpr int16_t FEEDBACK_PINS[SERVO_COUNT] = {
+      34, 35, 36, 39, -1
+    };
+
+The feedback pins must be ADC-capable pins for your ESP32 board.
+
+Configure ADC calibration:
+
+    constexpr int FEEDBACK_ADC_MIN = 0;
+    constexpr int FEEDBACK_ADC_MAX = 4095;
+
+The firmware converts the ADC reading into a logical angle and compares it with
+the software-estimated commanded angle.
+
+If the error exceeds:
+
+    constexpr float FEEDBACK_ERROR_LIMIT_DEG = 15.0f;
+
+the robot stops:
+
+    STOPPED FEEDBACK_ERROR
+
+Important: in the current design, feedback is monitoring only. The servo
+control remains open-loop. The firmware does not yet implement a full PID
+position controller.
+
+
+12. COMMAND PARSER
+==================
+
+CommandParser.cpp is intentionally restrictive.
+
+It:
+
+1. Converts input to uppercase.
+2. Splits the line into tokens.
+3. Parses only known command names.
+4. Validates numeric values.
+5. Calls specific RobotArm methods.
+
+It does not accept:
+
+- Raw PWM commands
+- Arbitrary GPIO commands
+- C++ code
+- Function names
+- JSON executed directly as code
+
+For example, this is safe:
+
+    MOVE_JOINT 2 60
+
+The parser passes only the joint number and angle into the robot controller.
+
+An invalid command returns:
+
+    ERROR: Unknown command
+
+An invalid number returns:
+
+    ERROR: Invalid joint command
+
+This is the safety boundary between an AI or host computer and the physical
+robot.
+
+
+13. AI INTEGRATION
+==================
+
+The ESP32 does not receive or execute arbitrary AI code.
+
+A safe architecture is:
+
+    AI-generated JSON
+            |
+            v
+    Python validation layer
+            |
+            v
+    Whitelisted text command
+            |
+            v
+    ESP32 parser
+            |
+            v
+    RobotArm safety checks
+
+Example JSON:
+
+    {
+      "action": "move_xyz",
+      "x": 200,
+      "y": 50,
+      "z": 150
+    }
+
+The Python gateway converts it to:
+
+    MOVE_XYZ 200 50 150
+
+Another example:
+
+    {
+      "action": "move_joint",
+      "joint": 2,
+      "angle": 60
+    }
+
+Becomes:
+
+    MOVE_JOINT 2 60
+
+A gripper command:
+
+    {
+      "action": "gripper",
+      "position": 50
+    }
+
+Becomes:
+
+    GRIP 50
+
+The gateway should reject unknown actions before sending anything:
+
+    allowed_actions = {
+        "move_joint",
+        "move_xyz",
+        "gripper",
+        "home",
+        "stop",
+        "status",
+    }
+
+The ESP32 still performs the final validation even if the Python layer makes
+a mistake.
+
+The AI should never be allowed to specify:
+
+- GPIO pins
+- Servo pulse widths
+- PWM frequency
+- Raw memory operations
+- C++ code
+- Arbitrary serial commands
+
+
+14. POWER WIRING
+================
+
+Do not power the servos from the ESP32 board.
+
+Correct arrangement:
+
+    External 5-6 V servo supply
+           +-- Base servo power
+           +-- Shoulder servo power
+           +-- Elbow servo power
+           +-- Wrist servo power
+           +-- Gripper servo power
+
+    External supply GND ----- ESP32 GND
+    ESP32 GPIO13 ------------ Base signal
+    ESP32 GPIO14 ------------ Shoulder signal
+    ESP32 GPIO25 ------------ Elbow signal
+    ESP32 GPIO26 ------------ Wrist signal
+    ESP32 GPIO27 ------------ Gripper signal
+
+Use a supply rated for the combined stall current.
+
+For example, if each servo can draw 2 A at stall, five servos may require a
+supply capable of approximately:
+
+    5 x 2 A = 10 A
+
+The exact value depends on the actual servo model and mechanical load.
+
+Add bulk capacitance near the servo power distribution:
+
+    470-1000 uF electrolytic capacitor
+
+Observe capacitor polarity.
+
+Symptoms of inadequate servo power include:
+
+- ESP32 resets
+- Servo jitter
+- Random movement
+- Serial disconnections
+- Brownouts
+- Overheating wires or connectors
+
+
+15. TYPICAL STARTUP PROCEDURE
+=============================
+
+1. Disconnect or support the robot arm links.
+2. Configure servo pins and limits.
+3. Connect the external servo supply.
+4. Connect ESP32 ground to servo supply ground.
+5. Upload the firmware.
+6. Open Serial Monitor at 115200.
+7. Send:
+
+       STATUS
+
+8. Test one joint:
+
+       TEST JOINT 1
+       J1 90
+       J1 100
+       J1 80
+
+9. Repeat for joints 2-4.
+10. Configure offsets and limits.
+11. Test the gripper:
+
+       GRIP 25
+       GRIP 50
+       GRIP OPEN
+       GRIP CLOSE
+
+12. Test the home pose:
+
+       HOME
+
+13. Test a conservative Cartesian position:
+
+       MOVE_XYZ 180 0 150
+
+14. Test the software stop:
+
+       MOVE_JOINT 2 150
+       STOP
+       RESET_STOP
+
+15. Test the physical emergency-stop input.
+
+
+16. EXAMPLE SERIAL SESSION
+==========================
+
+    READY
+
+Send:
+
+    STATUS
+
+Possible response:
+
+    STATE IDLE
+    JOINT 1 CURRENT=90.0 TARGET=90.0 SPEED=60.0
+    JOINT 2 CURRENT=90.0 TARGET=90.0 SPEED=45.0
+    JOINT 3 CURRENT=90.0 TARGET=90.0 SPEED=45.0
+    JOINT 4 CURRENT=0.0 TARGET=0.0 SPEED=60.0
+    JOINT 5 CURRENT=0.0 TARGET=0.0 SPEED=90.0
+    POSITION X=0.0 Y=0.0 Z=0.0
+
+Send:
+
+    MOVE_JOINT 2 60
+
+Response:
+
+    OK
+
+While moving, debug output may show:
+
+    STATE MOVING
+    JOINT 2 CURRENT=74.5 TARGET=60.0 SPEED=45.0
+
+At completion:
+
+    AT_TARGET
+
+
+17. IMPORTANT CURRENT LIMITATIONS
+==================================
+
+The project is a safe and modular foundation, but several advanced features
+still require robot-specific work:
+
+- The current IK supports a 3-DOF position model.
+- Wrist orientation is fixed.
+- Collision detection is not implemented.
+- Servo current monitoring is not implemented.
+- Feedback is optional monitoring, not closed-loop PID control.
+- Homing uses configured positions, not physical limit switches.
+- The current position estimate resets to configured home at boot.
+- COMMAND_TIMEOUT_MS is defined but not currently used as an automatic
+  communication watchdog.
+- The default servo limits and link lengths are placeholders until your
+  hardware is measured.
+
+The most important hardware-specific work is calibration: servo pulse limits,
+joint offsets, direction conventions, mechanical limits, link dimensions, and
+safe home position.
+
+
+18. REQUIRED LIBRARY
+====================
+
+Install ESP32Servo through the Arduino Library Manager:
+
+    #include <ESP32Servo.h>
+
+Install the Arduino-ESP32 board package and select the correct ESP32 board.
+
+For the Python serial example, install:
+
+    python -m pip install pyserial
+
+
+19. COMPLETE COMMAND REFERENCE
+==============================
+
+Joint movement:
+
+    MOVE_JOINT 1 90
+    MOVE_JOINT 2 60
+    MOVE_JOINT 3 110
+    MOVE_JOINT 4 0
+
+Cartesian movement:
+
+    MOVE_XYZ 200 50 150
+
+Gripper:
+
+    GRIP OPEN
+    GRIP CLOSE
+    GRIP 50
+
+Speed:
+
+    SPEED 2 20
+
+Home and status:
+
+    HOME
+    STATUS
+    HELP
+
+Emergency stop:
+
+    STOP
+    RESET_STOP
+
+Test mode:
+
+    TEST JOINT 1
+    J1 30
+    J1 60
+    J1 90
+
+Typical responses:
+
+    READY
+    OK
+    AT_TARGET
+    ERROR: Invalid joint
+    ERROR: Angle outside safety limit
+    ERROR: Position unreachable
+    ERROR: Invalid XYZ values
+    ERROR: Unknown command
+    STOPPED COMMAND
+    STOPPED PHYSICAL_ESTOP
+    STOPPED FEEDBACK_ERROR
+
