@@ -13,6 +13,11 @@ __pycache__/
 # mind/dum-e-qwen3-robot/, or retrain with mind/train_robot.py.
 mind/dum-e-qwen3-merged/
 
+# Superseded documentation. explain.txt described an ESP32/Arduino firmware
+# layer that never existed in this repository; the root README.md now covers
+# the real architecture and flags the stale sub-docs.
+explain.txt
+
 # Runtime state written by the app on every run. Machine-specific, not source.
 mind/robot_state.json
 mind/robot_command.json
