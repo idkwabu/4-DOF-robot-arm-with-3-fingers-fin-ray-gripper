@@ -326,9 +326,8 @@ a `tilt` carrying a base angle is rejected rather than silently half-applied.
 ## Kinematics at a glance
 
 The full derivation, the signed-radius reasoning, and the effective-forearm treatment live
-in [`movements/README.md`](movements/README.md). **That document is partly stale** — it
-disagrees with the code on DOF count, API signatures, and the reach envelope. Where they
-conflict, this section and the source are correct.
+in [`movements/README.md`](movements/README.md), which is re-derived from the source and
+agrees with it. Where anything still conflicts, the source is correct.
 
 ### Link geometry
 
@@ -385,7 +384,7 @@ forearm `m` is measured from `L2` along a direction set by `joint3`:
 `joint3 = -60°` default, which is the figure most references quote.
 
 The inner bound is a signed quantity reported as a distance. `m` crosses `L1 = 300 mm`
-at `joint3 ≈ -75°`, where the reported inner bound collapses to 0.001 mm; on either side
+at `joint3 = ±75°`, where the reported inner bound collapses to 0.00 mm; on either side
 of that the arm can reach essentially its own base. See
 [known issue 14](#14-absl1---m-hides-a-sign-change).
 
@@ -869,24 +868,28 @@ start and then fail on its first model load.
 `mind/robot_command.json`. Nothing reads the root copy. It is a leftover from the pre-`mind/`
 layout and is gitignored.
 
-### 10. Sub-documentation is stale
+### 10. Sub-documentation was stale — corrected in this release
 
-- `movements/README.md` is titled 4-DOF, but its glossary (line 1027) incorrectly states
-  "an independently controllable joint (here: **3**)". Its code examples build
-  `JointAngles` with three positional arguments (lines 138, 142, 143, 253, 962-966) against
-  a four-field dataclass. Its derived-values table (line 993-996) and associated prose
-  assume `l_g = finger_length/2 · cos(spread)` — a pre-tripod half-length model — which
-  produces `m_g = 306.29 mm` and `6.29 – 606.29 mm`. The actual code uses
-  `l_g = FINGER_LENGTH · cos(spread)` (43.30 mm open), so it produces `m_g = 321.97 mm`
-  and a **joint3-dependent** reach envelope with a maximum of **663.30 mm** at
-  `joint3 = 0°`. That is the root cause of the discrepancy — the document and code are
-  mathematically consistent with different gripper models.
-- `mind/README-DUM-E.txt` line 128 reports `test_resolver.py` as having 211 assertions
-  where the suite now runs 736.
+Both sub-documents previously carried numbers derived from a gripper model the code never
+used: `l_g = finger_length/2 · cos(spread)`, a pre-tripod **half-length** model. Under it,
+`m_g = 306.29 mm` and reach is `6.29 – 606.29 mm`. The code uses the full
+`l_g = FINGER_LENGTH · cos(spread)` (43.30 mm open), giving `m_g = 321.97 mm` at
+`joint3 = -60°` and a **joint3-dependent** envelope whose maximum is 663.30 mm at
+`joint3 = 0°`. The document and the code were mathematically consistent with *different*
+gripper models; that, not a typo, is why every downstream number was off.
 
-These are corrected in the updated `movements/README.md` alongside this release, but
-historical copies elsewhere may still show the stale numbers. Trust the source code over
-both sub-documents for numeric values.
+Also stale and now fixed:
+
+- `movements/README.md` glossed DOF as 3, built `JointAngles` with three arguments
+  against a four-field dataclass, omitted `joint3` from most FK/IK signatures and all
+  `RobotArm` examples, described `WRIST_STEM_ANGLE` as a *fixed* stem kink rather than a
+  commandable fourth joint, and omitted `joint3` from the `JOINT_LIMITS` listing.
+- `mind/README-DUM-E.txt` reported `test_resolver.py` as having 211 assertions where the
+  suite runs 736.
+
+Every numeric claim in `movements/README.md` is now re-derived from
+`movements/robot_arm.py`, and every Python block in both documents executes as written.
+Trust the source code over any document for numeric values.
 
 ### 11. `features_macro/hand_recognition.py` is empty
 
@@ -922,10 +925,11 @@ again.
 
 The inner reach bound is reported as `abs(L1 - m)`, but `L1 - m` is genuinely **negative**
 across most of the range: `m` exceeds `L1 = 300 mm` for any `joint3` between roughly
-−73° and +73°.
+−75° and +75°, and is symmetric in the sign of `joint3` because `m` depends on
+`cos(joint3)`.
 
-At `joint3 ≈ -75°` the two are equal and the reported inner bound collapses to
-**0.001 mm** — the arm can reach its own base. That is correct as a *distance*, and it is
+At `joint3 = ±75°` exactly, `m = L1`, and the reported inner bound collapses to
+**0.00 mm** — the arm can reach its own base. That is correct as a *distance*, and it is
 the number a caller should compare against, but it hides the fact that the arm is fully
 folded there. The signed value is the more informative quantity.
 
@@ -935,7 +939,7 @@ folded there. The signed value is the more informative quantity.
 
 | Document | Contents | Reliability |
 |---|---|---|
-| `mind/README-DUM-E.txt` | Full parser and resolver reference, every rule, every regex | Current, except the assertion count |
+| `mind/README-DUM-E.txt` | Full parser and resolver reference, every rule, every regex | Current — assertion count corrected |
 | `movements/README.md` | Kinematics derivation, signed-radius reasoning, effective forearm | Corrected in this release — equations, examples and reach values all re-derived from source |
 | `mind/system_prompt.txt` | The model's exact contract | Source of truth |
 

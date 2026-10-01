@@ -125,7 +125,7 @@ Files
 
     mind.py                     the runtime: parser, model call, resolver, state
     system_prompt.txt           the model's instructions, and the only copy
-    test_resolver.py            211 assertions, no model needed
+    test_resolver.py            736 checks, no model needed
     verify_model.py             end-to-end check against the held-out split
     generate_robot_dataset.py   rebuilds robot_dataset.jsonl / _eval.jsonl
     train_robot.py              QLoRA fine-tune, 1000 steps

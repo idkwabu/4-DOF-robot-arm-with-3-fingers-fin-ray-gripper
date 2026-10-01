@@ -1,24 +1,30 @@
 # DUM-E — 4-DOF Robot Arm Kinematics Core
 
 A single-file mathematics + visualization layer for a 4-DOF robot arm
-(`Base → fixed L0 → joint1/L1 → joint2/L2 → wrist mount → fixed L3 →
+(`Base → fixed L0 → joint1/L1 → joint2/L2 → joint3/wrist mount → L3 →
 gripper mount → Fingers`). The model is a fixed vertical `L0 = 50 mm` base
 link, a `300 mm` L1 upper link, a `250 mm` L2 forearm, and a `70 mm` L3 wrist
-link at a fixed `WRIST_STEM_ANGLE = -60°` relative to L2. L0 cannot tilt; the
-base rotates about world `+Z`; joint1 and joint2 control radial-Z tilt and
-have no independent spin. At the gripper mount sits a simulated **3-finger
+stem. **The four DOF are `theta_base`, `joint1`, `joint2` and `joint3`** — `joint3`
+is the wrist and is a real, commandable joint (`±150°`, default `-60°`), *not* a
+fixed kink. The `WRIST_STEM_ANGLE = -60°` config field is a legacy constant that
+survives only in the dead `_reach_bounds` helper and the `_grip_parameters`
+reporting path; the live kinematics all use the `joint3` you pass in. L0 cannot
+tilt; the base rotates about world `+Z`; joint1 and joint2 control radial-Z tilt
+and have no independent spin. At the gripper mount sits a simulated **3-finger
 gripper** (`GRIPPER_FINGERS = 3`): three straight `FINGER_LENGTH` segments
 spaced 120° around the tool axis, whose on-axis **grip point** (the fingertip
 centroid — where a gripped object sits) is the end-effector that FK/IK/
 reachability use. The opening is configurable (`GRIPPER_OPENING`, 0 = closed
 with the tips meeting on the axis, 1 = fully open).
 
-> **Reach envelope:** the effective forearm `m_g ≈ 306 mm` is almost exactly
-> `L1 = 300 mm`, so the inner reach bound `|L1 − m_g| ≈ 6 mm` is tiny. Reachable
-> radial-Z distances are measured from the joint1 pivot at `(0, 0, L0)`, not
-> from the world origin: with the default opening they are approximately
-> `6.29 … 606.29 mm` from that pivot (a shifted shell, not a shell centered at
-> the origin).
+> **Reach envelope:** the envelope is **not a single number** — it depends on
+> `joint3`, because the effective forearm `m` is measured from `L2` along a
+> direction set by that joint. Reachable radial-Z distances are measured from the
+> joint1 pivot at `(0, 0, L0)`, not from the world origin. With the default
+> `joint3 = -60°` and the gripper open the range is `21.97 … 621.97 mm`; the
+> **maximum** over all `joint3` is `63.30 … 663.30 mm` at `joint3 = 0°`
+> (`70.00 … 670.00 mm` with the gripper closed). See
+> [§8](#8-workspace-and-joint-limits--two-separate-ideas) for the full table.
 
 **Stage scope:** forward kinematics, inverse kinematics, workspace validation,
 joint-limit validation, FK→IK→FK verification, a 3D visualization — plus
@@ -111,41 +117,60 @@ the **animation frame count** (Enter keeps 30).
 ```python
 import robot_arm as ra
 
-# FK: degrees in, millimetres out (grip point = object centre)
-p = ra.forward_kinematics(30.0, 45.0, -40.0)   # CartesianPoint(x, y, z)
+# FK: degrees in, millimetres out (grip point = object centre).
+# joint3 is a REQUIRED positional argument.
+p = ra.forward_kinematics(30.0, 45.0, -40.0, -60.0)      # CartesianPoint(x, y, z)
 
 # Optional gripper opening, 0 (closed) .. 1 (open); defaults to gripper_opening
-p = ra.forward_kinematics(30.0, 45.0, -40.0, opening=0.0)
+p = ra.forward_kinematics(30.0, 45.0, -40.0, -60.0, opening=0.0)
 
-# Full geometry: joint1, joint2, joint3, gripper_mount, fingertips, grip point
-gp = ra.gripper_pose(30.0, 45.0, -40.0)        # FingerGripper
-tips = ra.finger_tips(30.0, 45.0, -40.0)       # tuple of 3 CartesianPoint
+# Full geometry: joint positions, gripper_mount, fingertips, grip point
+gp = ra.gripper_pose(30.0, 45.0, -40.0, -60.0)           # FingerGripper
+tips = ra.finger_tips(30.0, 45.0, -40.0, -60.0)          # tuple of 3 CartesianPoint
 
-# IK: millimetres in, degrees out; the target is a world-frame grip point
+# IK: millimetres in, degrees out; the target is a world-frame grip point.
+# Pass joint3="auto" to let the solver pick it.
 angles = ra.inverse_kinematics(300.0, 120.0, 150.0, joint2_up=True)  # JointAngles
 
-# Workspace + limits
+# Workspace + limits (is_reachable also takes joint3, default -60 deg)
 ra.is_reachable(300.0, 120.0, 150.0)          # bool
-ra.check_joint_limits(30.0, 45.0, -40.0)        # bool
+ra.check_joint_limits(30.0, 45.0, -40.0, -60.0)   # bool
 
-# Object-oriented facade binding a config
-arm = ra.RobotArm()
-arm.l0, arm.l1, arm.l2, arm.l3                 # 50, 300, 250, 70 mm
-arm.forward_kinematics(0.0, 90.0, 0.0)
-arm.plot(arm.inverse_kinematics(300.0, 120.0, 150.0))
-
-# Interactive 3D visualization
-angles = ra.JointAngles(30.0, 45.0, -40.0)
-ra.plot_robot(angles, target=ra.CartesianPoint(300.0, 120.0, 150.0))
+# Interactive 3D visualization (JointAngles takes four fields)
+ra.plot_robot(ra.JointAngles(30.0, 45.0, -40.0, -60.0),
+              target=ra.CartesianPoint(300.0, 120.0, 150.0))
 
 # Smooth joint-space transition between two poses
-frames = ra.interpolate_joints(angles, ra.JointAngles(45.0, 30.0, -20.0), frames=60)
-ra.plot_animation(angles, ra.JointAngles(45.0, 30.0, -20.0),
+ra.interpolate_joints(ra.JointAngles(30.0, 45.0, -40.0, -60.0),
+                      ra.JointAngles(45.0, 30.0, -20.0, -60.0), frames=60)
+ra.plot_animation(ra.JointAngles(30.0, 45.0, -40.0, -60.0),
+                  ra.JointAngles(45.0, 30.0, -20.0, -60.0),
                   target=ra.CartesianPoint(150.0, 60.0, 80.0), frames=60)
 
 # Verification (optional opening argument)
 ra.verify_fk_ik(n_samples=50)
 ```
+
+### Known bug: the `RobotArm` facade drops `joint3`
+
+`RobotArm` wraps a config so you need not pass `config=` everywhere, but its kinematic
+methods were **not updated when `joint3` was added** to the 4-DOF arm. As shipped,
+**5 of its 7 public methods raise `TypeError`**:
+
+| Method | Status |
+| --- | --- |
+| `RobotArm.forward_kinematics(theta_base, joint1, joint2, opening=None)` | **broken** — no `joint3`; the 4th positional is captured as `config` |
+| `RobotArm.gripper_pose(...)` | **broken** — same cause |
+| `RobotArm.check_joint_limits(...)` | **broken** — takes 4 positional args, so a `joint3` argument is rejected |
+| `RobotArm.is_reachable(...)` | **broken** — forwards `joint3=None` into the geometry |
+| `RobotArm.inverse_kinematics(...)` | works |
+| `RobotArm.plot(...)` | works |
+| `RobotArm.verify(...)` | works |
+
+**Use the module-level functions in §12 above** — they take a `config` keyword and are
+correct. `RobotArm.inverse_kinematics`, `.plot` and `.verify` are safe if you have a
+`RobotArm` instance for other reasons. This is a source defect, not a documentation
+choice; see [issue 1](../README.md#1-the-robotarm-facade-is-missing-joint3-and-passes-the-wrong-arity) in the root README.
 
 ---
 
@@ -194,18 +219,19 @@ Select option: 2
   gripper opening 0..1 (default 1, Enter = default):
 
   theta_base=  21.801 deg
-  joint1=  74.177 deg
-  joint2= -97.173 deg
+  joint1=  77.435 deg
+  joint2= -96.480 deg
   within joint limits: yes
 ```
 
 Try the *down* configuration for the same target — you get a different pose
-(`joint1= -39.783 deg, joint2= 127.211 deg`) whose grip point is still exactly
-`(300, 120, 150)`. Try option `3` with `(700, 0, 0)`: it is **UNREACHABLE**
-(more than `L1 + m_g = 606.29` mm from the joint1 pivot with the default
-opening). The inner bound is only ~6.29 mm, so `(100, 0, 0)` is reachable
-geometrically from the `z=L0` pivot; check the joint limits before relying on
-it.
+(`joint1= -43.041 deg, joint2= 131.968 deg`) whose grip point is still exactly
+`(300, 120, 150)`. Try option `3` with `(700, 0, 0)`: it is **UNREACHABLE** at the
+default `joint3 = -60°`, because that is beyond `L1 + m = 621.97` mm from the joint1
+pivot. (It is still unreachable at *every* `joint3`: the largest outer bound the arm has
+is `663.30 mm`, at `joint3 = 0°`.) The inner bound at the default `joint3` is only
+21.97 mm, so `(100, 0, 0)` is reachable geometrically from the `z = L0` pivot; check the
+joint limits before relying on it.
 
 
 **Option `5` — Visualize From XYZ Target** opens a matplotlib window
@@ -214,7 +240,7 @@ Confirm the target (`red +`) sits exactly on the green grip-point marker: run
 option `5` with the same `(300, 120, 150)` and check the recon-FK line:
 
 ```
-  IK result: base=21.801, joint1=74.177, joint2=-97.173 (deg)
+  IK result: base=21.801, joint1=77.435, joint2=-96.480 (deg)
   FK(recomputed): x=300.000, y=120.000, z=150.000 mm
 ```
 
@@ -245,40 +271,42 @@ Create a file `demo.py` alongside `robot_arm.py`:
 """Minimal DUM-E demo: FK, IK, workspace, limits, then a 3D plot."""
 import robot_arm as ra
 
+# Module-level functions are used throughout: the RobotArm facade's kinematic
+# methods still drop joint3 and raise TypeError (see the facade note in section 3).
+
 
 def main() -> None:
-    arm = ra.RobotArm()
-
     # 1) Forward kinematics: angles (deg) -> grip point (mm)
-    pose = ra.JointAngles(45.0, 30.0, -20.0)
-    grip = arm.forward_kinematics(pose.theta_base, pose.joint1, pose.joint2)
-    print(f"FK(45, 30, -20) -> x={grip.x:.3f} y={grip.y:.3f} z={grip.z:.3f}")
+    pose = ra.JointAngles(45.0, 30.0, -20.0, -60.0)
+    grip = ra.forward_kinematics(pose.theta_base, pose.joint1, pose.joint2, pose.joint3)
+    print(f"FK(45, 30, -20, -60) -> x={grip.x:.3f} y={grip.y:.3f} z={grip.z:.3f}")
 
     # Finger geometry for the same pose (opening defaults to gripper_opening=1)
-    gp = arm.gripper_pose(pose.theta_base, pose.joint1, pose.joint2)
+    gp = ra.gripper_pose(pose.theta_base, pose.joint1, pose.joint2, pose.joint3)
     print(f"   spread={gp.spread:.1f} deg, {len(gp.fingertips)} fingertips")
-    print(f"   wrist = ({gp.wrist.x:.3f}, {gp.wrist.y:.3f}, {gp.wrist.z:.3f}) mm")
+    print(f"   wrist = ({gp.joint3.x:.3f}, {gp.joint3.y:.3f}, {gp.joint3.z:.3f}) mm")
 
     # 2) Inverse kinematics: grip point (mm) -> angles (deg), joint2 pose up/down
     target = ra.CartesianPoint(300.0, 120.0, 150.0)
-    up = arm.inverse_kinematics(target.x, target.y, target.z, joint2_up=True)
-    down = arm.inverse_kinematics(target.x, target.y, target.z, joint2_up=False)
+    up = ra.inverse_kinematics(target.x, target.y, target.z, joint2_up=True)
+    down = ra.inverse_kinematics(target.x, target.y, target.z, joint2_up=False)
     print(f"IK up   -> base={up.theta_base:7.3f}  joint1={up.joint1:7.3f}  joint2={up.joint2:7.3f}")
     print(f"IK down -> base={down.theta_base:7.3f}  joint1={down.joint1:7.3f}  joint2={down.joint2:7.3f}")
 
     # 3) Sanity: FK(IK(target)) reproduces the target for both modes
     for sol in (up, down):
-        back = arm.forward_kinematics(sol.theta_base, sol.joint1, sol.joint2)
+        back = ra.forward_kinematics(sol.theta_base, sol.joint1, sol.joint2, sol.joint3)
         err = ((back.x - target.x) ** 2 + (back.y - target.y) ** 2 + (back.z - target.z) ** 2) ** 0.5
         print(f"   round-trip error: {err:.2e} mm")
 
-    # 4) Workspace and limits (opening changes the reach slightly)
-    print("reachable(300,120,150):", arm.is_reachable(target.x, target.y, target.z))
-    print("reachable(700,0,0):    ", arm.is_reachable(700.0, 0.0, 0.0))
-    print("within limits (up):     ", arm.check_joint_limits(up.theta_base, up.joint1, up.joint2))
+    # 4) Workspace and limits (opening and joint3 both change the reach)
+    print("reachable(300,120,150):", ra.is_reachable(target.x, target.y, target.z))
+    print("reachable(700,0,0):    ", ra.is_reachable(700.0, 0.0, 0.0))
+    print("within limits (up):     ", ra.check_joint_limits(
+        up.theta_base, up.joint1, up.joint2, up.joint3))
 
     # 5) Interactive 3D plot with the target marked and fingers drawn
-    arm.plot(up, target=target)
+    ra.plot_robot(up, target=target)
 
 
 if __name__ == "__main__":
@@ -419,16 +447,18 @@ gripper swings past the vertical axis and ends up "behind" the base
 front-facing pose with `theta_base = atan2(y, x)`, so it still reaches the
 point, but it may not reproduce the original angles of a backward-folded pose.
 
-**Fixed wrist stem:** the gripper stem `L3` points `phi` degrees off the
-forearm direction (`phi = WRIST_STEM_ANGLE`, default `-60°`), so there is a
-visible kink at the joint-2 marker. Because it is rigid, `joint2` moves it
-*together with* the forearm. The stem runs from the **wrist mount** (end of L2)
-to the **gripper mount** (end of L3). Mathematically the tip behaves like a plain
-2-link arm whose forearm has magnitude and phase
+**Wrist joint (`joint3`):** the `L3` stem points `joint3` degrees off the forearm
+direction (default `-60°`), so there is a visible kink at the wrist-mount marker.
+`joint3` is the fourth DOF, so the stem points *wherever you command it* — but
+within a single pose it is rigid, so `joint2` moves the stem *together with* the
+forearm. That is what makes the planar solver closed-form. The stem runs from
+the **wrist mount** (end of L2) to the **gripper mount** (end of L3).
+Mathematically the tip behaves like a plain 2-link arm whose forearm has magnitude
+and phase:
 
 ```
-m     = |L2 + L3·e^(i·phi)|        (≈ 291.4 mm default)
-delta = arg(L2 + L3·e^(i·phi))     (≈ −12.01° default)
+m     = |L2 + L3·e^(i·joint3)|        (≈ 291.38 mm at joint3 −60°)
+delta = arg(L2 + L3·e^(i·joint3))     (≈ −12.01° at joint3 −60°)
 ```
 
 **Gripper fingers & grip point:** `GRIPPER_FINGERS = 3` straight segments of
@@ -448,37 +478,50 @@ same planar picture: the on-axis extension `(L3 + l_g)` replaces `L3` above,
 giving an *opening-dependent* effective forearm
 
 ```
-m_g     = |L2 + (L3 + l_g)·e^(i·phi)|      (≈ 306.3 mm @ opening 1)
-delta_g = arg(L2 + (L3 + l_g)·e^(i·phi))   (≈ −15.02° @ opening 1)
+a_g     = L3 + l_g                       # stem plus grip depth, rigid together
+m_g     = |L2 + a_g·e^(i·phi)|            (≈ 321.97 mm @ joint3 −60°, opening 1)
+delta_g = arg(L2 + a_g·e^(i·phi))         (≈ −17.74° @ joint3 −60°, opening 1)
 ```
 
-(`delta_g` is naturally a radian phase, handled internally in radians;
-the degree equivalents are ≈ −15.02° open / ≈ −15.46° closed.)
+Two things follow, and both matter:
+
+**`phi` is `joint3`, not the `WRIST_STEM_ANGLE` constant.** The stem and the grip
+depth rotate together with the wrist, so `m_g` and `delta_g` are functions of the
+*commanded* `joint3` and of the opening. That is what makes the reach envelope in
+[§8](#8-workspace-and-joint-limits--two-separate-ideas) joint3-dependent. The table
+below is evaluated at the default `joint3 = −60°`; every `m_g` figure elsewhere in
+this document assumes the same.
+
+**The degree figures are** `delta_g ≈ −17.74°` open / `≈ −18.53°` closed.
+(`delta_g` is naturally a radian phase, handled internally in radians.)
 
 `opening = 0` (closed) pushes the grip point furthest (tips meet on the axis,
-`l_g = FINGER_LENGTH`, `m_g ≈ 333.7 mm`); `opening = 1` pulls it back
-(`m_g ≈ 306.3 mm`). So closing the gripper slightly *increases* the reach
-(by ≈ 2.38 mm at the default lengths).
+`l_g = FINGER_LENGTH = 50.00 mm`, `m_g ≈ 326.96 mm`); `opening = 1` pulls it back
+(`l_g = 43.30 mm`, `m_g ≈ 321.97 mm`). So closing the gripper slightly *increases*
+the reach (by ≈ 4.99 mm at the default lengths).
 
 ---
 
 ## 6. Forward Kinematics (FK)
 
-```python
-forward_kinematics(theta_base, joint1, joint2, opening=None)  # -> (x, y, z) [mm]
+```text
+forward_kinematics(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None)
+# -> CartesianPoint(x, y, z) [mm]
 ```
 
-Returns the **grip point** (on-axis centroid of the fingertips). With
-`phi = WRIST_STEM_ANGLE` and `l_g = FINGER_LENGTH·cos(spread)`:
+Returns the **grip point** (on-axis centroid of the fingertips). Note `joint3` is a
+required positional argument. With `l_g = FINGER_LENGTH·cos(spread)` and `phi` = the
+`joint3` argument (in radians):
 
 ```
-r = L1·cos(joint1) + L2·cos(joint1 + joint2) + (L3 + l_g)·cos(joint1 + joint2 + phi)
+r = L1·cos(joint1) + L2·cos(joint1 + joint2) + (L3 + l_g)·cos(joint1 + joint2 + joint3)
 x = r·cos(theta_base),        y = r·sin(theta_base)
-z = L0 + L1·sin(joint1) + L2·sin(joint1 + joint2) + (L3 + l_g)·sin(joint1 + joint2 + phi)
+z = L0 + L1·sin(joint1) + L2·sin(joint1 + joint2) + (L3 + l_g)·sin(joint1 + joint2 + joint3)
 ```
 
+`joint1`, `joint2` and `joint3` are in degrees here and converted internally.
 Link 1 points at `joint1`, link 2 at `joint1 + joint2`, and the on-axis
-extension (stem `L3` + grip depth `l_g`) at `joint1 + joint2 + phi` (all in
+extension (stem `L3` + grip depth `l_g`) at `joint1 + joint2 + joint3` (all in
 the radial–Z plane); the base azimuth fans the result around `+Z`. The fixed
 vertical link `L0` adds a constant height offset. Useful identity used by the
 IK (with `m_g` and `delta_g` from the section above):
@@ -488,28 +531,31 @@ d² = r² + (z - L0)² = L1² + m_g² + 2·L1·m_g·cos(joint2 + delta_g)
 ```
 
 so the pose with `joint2 + delta_g = 0` reaches `L1 + m_g` from the joint1
-pivot, and the pose with `joint2 + delta_g = ±180°` reaches `|L1 − m_g|`.
+pivot, and the pose with `joint2 + delta_g = ±180°` reaches `|L1 − m_g|`. Because
+`m_g` depends on `joint3`, that maximum is itself a function of `joint3`.
 
 The full finger geometry for a pose is available separately:
 
-```python
-gp = gripper_pose(theta_base, joint1, joint2, opening=None)  # FingerGripper
-gp.joint1       # joint1 position (CartesianPoint)
-gp.joint2       # joint2 position (CartesianPoint)
-gp.joint3       # joint3 position (end of L2)
+```text
+gp = gripper_pose(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None)
+# -> FingerGripper
+gp.joint1        # joint1 position (CartesianPoint)
+gp.joint2        # joint2 position (CartesianPoint)
+gp.joint3        # wrist joint position (end of L2)
 gp.gripper_mount # gripper mount (end of L3)
-gp.axis         # unit tool-axis direction
-gp.spread       # finger spread off the axis [deg]
-gp.fingertips   # 3 CartesianPoint tips
-gp.grip_point   # on-axis centroid (the FK result)
+gp.axis          # unit tool-axis direction
+gp.spread        # finger spread off the axis [deg]
+gp.fingertips    # 3 CartesianPoint tips
+gp.grip_point    # on-axis centroid (the FK result)
 ```
 
 ---
 
 ## 7. Inverse Kinematics (IK)
 
-```python
-inverse_kinematics(x, y, z, joint2_up: bool = True, opening=None)  # -> JointAngles [deg]
+```text
+inverse_kinematics(x, y, z, joint2_up=True, config=DEFAULT_CONFIG, opening=None, joint3=-60.0)
+# -> JointAngles [deg]; joint3 may also be the string "auto"
 ```
 
 The target `(x, y, z)` is the **grip point** (object centre).
@@ -521,9 +567,9 @@ The target `(x, y, z)` is the **grip point** (object centre).
    ```
 
 2. **Collapse to 2-D**: `r = sqrt(x² + y²)`, `height = z - L0`, `d = sqrt(r² + height²)`.
-   With the fixed wrist stem AND the grip depth folded into an effective
-   forearm `m_g = |L2 + (L3 + l_g)·e^(i·phi)|`,
-   `delta_g = arg(L2 + (L3 + l_g)·e^(i·phi))`, the grip point behaves like a
+   With the wrist stem AND the grip depth folded into an effective
+   forearm `m_g = |L2 + (L3 + l_g)·e^(i·joint3)|`,
+   `delta_g = arg(L2 + (L3 + l_g)·e^(i·joint3))`, the grip point behaves like a
    plain 2-link arm with links `(L1, m_g)`, so if `d` is outside
    `[|L1 − m_g|, L1 + m_g]`, raise `ValueError` — the target is
    geometrically unreachable.
@@ -580,32 +626,50 @@ invalid (non-finite input).
 **Geometric reachability** (`is_reachable`): the target is reachable iff
 
 ```
-|L1 − m_g| ≤ sqrt( (sqrt(x²+y²))² + (z - L0)² ) ≤ L1 + m_g
+|L1 − m_g| ≤ d ≤ L1 + m_g,      d = sqrt( (sqrt(x²+y²))² + (z - L0)² )
 ```
 
-where `L0` is the fixed vertical base link height.
+where `L0` is the fixed vertical base link height and `m_g = |L2 + (L3 + l_g)·e^(i·joint3)|`
+is the effective forearm — the wrist stem **and** the grip depth folded in, measured
+along the direction set by `joint3`.
 
-where `m_g = |L2 + (L3 + l_g)·e^(i·phi)|` is the effective forearm with the
-fixed wrist stem AND the gripper grip depth folded in (`≈ 306.3 mm` at the
-default opening 1, `≈ 308.7 mm` when the gripper is closed at opening 0).
-This uses the exact same `d` definition (and `_reach_bounds`) as the IK, so
-the two checks are consistent by construction. Closing the gripper enlarges
-the reach slightly: with defaults, `max = 606.3 mm` (open) → `608.7 mm`
-(closed).
+**This is why there is no single "reach" number.** `m_g` varies with `joint3`, so the
+envelope is a family of shells. Measured from the joint1 pivot, in mm:
 
-> **Near-full reach, both ways:** `L1 = 300` and `m_g ≈ 306` are almost equal,
-> so the inner bound `|L1 − m_g| ≈ 6 mm` is tiny — the arm reaches essentially
-> right up to its own base as well as out to ~606 mm. With opening 1 the
-> reachable shell is `[6.29, 606.29] mm`; with the gripper closed,
-> `[8.67, 608.67] mm`. Note that closing the gripper *raises* both bounds, so a
-> target very near the base can become unreachable when the fingers close.
+| `joint3` | shell, gripper open (`opening=1`) | shell, gripper closed (`opening=0`) |
+|---|---|---|
+| ±90° | 25.52 … 574.48 | 22.69 … 577.31 |
+| ±75° | 0.00 … 600.00 | 4.02 … 604.02 |
+| ±60° | 21.97 … 621.97 | 26.96 … 626.96 |
+| ±30° | 52.70 … 652.70 | 58.97 … 658.97 |
+| **0°** | **63.30 … 663.30** | **70.00 … 670.00** |
+
+The envelope is symmetric in the sign of `joint3` because `m_g` depends on
+`cos(joint3)`. **Maximum reach is 663.30 mm open / 670.00 mm closed, at `joint3 = 0°`** —
+*not* at the `-60°` default, and *not* the `~606 mm` figure older revisions of this
+document quote. That older number came from a half-length gripper model
+(`l_g = FINGER_LENGTH/2 · cos(spread)`), which the code does not use; see
+[issue 10](../README.md#10-sub-documentation-was-stale--corrected-in-this-release) in the root README.
+
+`is_reachable` takes `joint3` as an explicit argument (default `-60°`) and shares its
+bounds with the IK via `_reach_bounds_with_joint3`, so the two checks agree by
+construction. A private `_reach_bounds` helper that pins the wrist angle to the
+`WRIST_STEM_ANGLE` constant also exists but is **dead code** — it is correct only when
+`joint3` happens to equal that constant.
+
+> **Near-full reach, both ways:** at `joint3 ≈ ±75°` the effective forearm satisfies
+> `m_g = L1 = 300 mm` exactly, so the inner bound `|L1 − m_g|` collapses to **0.00 mm**
+> — the arm can reach its own base. Between roughly ±75° the shell is wide open at both
+> ends; outside it, `m_g < L1` and the inner bound grows again. Note that closing the
+> gripper *raises* both bounds, so a target very near the base can become unreachable
+> when the fingers close.
 
 **Joint-limit reachability** (`check_joint_limits`): whether the *physical*
 arm can realize a solution. Limits are configuration parameters (degrees),
 kept separate from the IK math so they can be tuned when the real arm is
 built:
 
-```python
+```text
 L0 = 50.0                 # mm  fixed vertical base link (base -> joint1)
 L1 = 300.0                # mm  link 1 (joint1 -> joint2), upper arm
 L2 = 250.0                # mm  link 2 (joint2 -> wrist mount), forearm
@@ -619,12 +683,13 @@ JOINT_LIMITS = {
     "base":     (-180.0, 180.0),   # full revolution
     "joint1":   (-90.0,  110.0),   # link-1 angle from horizontal outward
     "joint2":   (-150.0, 150.0),   # relative link-2 angle
+    "joint3":   (-150.0, 150.0),   # wrist angle relative to the forearm
 }
 ```
 
-Because the stem + grip depth is a rigid on-axis extension (fixed `phi`), the
-kinematics reduce to an effective 2-link arm `(L1, m_g, delta_g)` while the
-elbow (joint 2) physically stays at the end of `L2`.
+Because the stem + grip depth is a rigid on-axis extension (fixed at whatever `joint3`
+you passed), the kinematics reduce to an effective 2-link arm `(L1, m_g, delta_g)` while
+the elbow (joint 2) physically stays at the end of `L2`.
 
 A point can be geometrically reachable yet have no solution inside the
 joint limits.
@@ -633,8 +698,8 @@ joint limits.
 
 ## 9. FK → IK → FK verification
 
-```python
-verify_fk_ik(n_samples=20, opening=None)
+```text
+verify_fk_ik(n_samples=20, config=DEFAULT_CONFIG, opening=None)
 ```
 
 For each random sample (sampled inside the joint limits) it:
@@ -715,9 +780,9 @@ Visualization tab, whose toolbar lets you rotate/zoom the 3D view.
   grip point (centroid) is the end-effector for FK/IK/reachability, but the
   opening is a tool parameter, not a servo degree of freedom. Treating the
   stem + grip depth `(L3 + l_g)` as a fixed-angle on-axis extension keeps the
-  planar solver closed-form: `L2 + (L3 + l_g)·e^(i·phi) = m_g·e^(i·delta_g)`
-  (`m_g ≈ 308.7 mm / 306.3 mm` for opening 0 / 1, `delta_g ≈ −15.46° / −15.02°`). The
-  physical elbow angle is recovered as `joint2 = te − delta_g`.
+  planar solver closed-form: `L2 + (L3 + l_g)·e^(i·joint3) = m_g·e^(i·delta_g)`
+  (`m_g ≈ 326.96 mm / 321.97 mm` for opening 0 / 1, `delta_g ≈ −18.53° / −17.74°`, both at
+  `joint3 = −60°`). The physical elbow angle is recovered as `joint2 = te − delta_g`.
 - Internal structure of the file (in order): imports → configuration →
   data structures (incl. `FingerGripper`) → math utilities → FK (+
   `gripper_pose`/`finger_tips`) → IK → workspace validation →
@@ -810,8 +875,8 @@ finger positions are a bonus built on top (see §12.5).
 Two rigid vectors whose angle between them is **constant** always add to a
 single vector whose **length** and **angle** are also constant. The last two
 vectors of the arm — the forearm `L2` and the on-axis extension
-`L3 + l_g` (stem + grip depth) — have exactly that fixed angle `phi` between
-them, so they collapse into one constant vector:
+`L3 + l_g` (stem + grip depth) — have exactly that fixed angle between them (it
+is `joint3`, constant *within a pose*), so they collapse into one vector:
 
 ```
 L2·e^(i·(j1+j2))  +  (L3 + l_g)·e^(i·(j1+j2+phi))
@@ -823,14 +888,17 @@ and link 2 = the effective forearm `m_g` (stem offset by `delta_g`). This is
 **why the IK never needs to iterate** — it is closed-form trigonometry
 (`atan2`, `acos`) on that 2-link arm. Constants:
 
-- Stem only (`l_g = 0`): `m ≈ 291.4 mm`, `delta ≈ −12.01°`.
-- Grip point, open (`opening 1`): `m_g ≈ 306.3 mm`, `delta_g ≈ −15.02°`.
-- Grip point, closed (`opening 0`): `m_g ≈ 308.7 mm`, `delta_g ≈ −15.46°`.
+- Stem only (`l_g = 0`): `m ≈ 291.38 mm`, `delta ≈ −12.01°`.
+- Grip point, open (`opening 1`): `m_g ≈ 321.97 mm`, `delta_g ≈ −17.74°`.
+- Grip point, closed (`opening 0`): `m_g ≈ 326.96 mm`, `delta_g ≈ −18.53°`.
+
+All three are evaluated at `joint3 = −60°`. The stem-only figures are independent of the
+gripper; the grip-point figures vary with both `opening` **and** `joint3`.
 
 The grip point `G = gripper_mount + l_g·axis` lies ON the tool axis
 (`l_g = FINGER_LENGTH·cos(spread)`); on-axis points fold into the same planar
 model — which is exactly why a **3-finger gripper adds zero mathematical
-complexity**. Closing the fingers pushes `G` forward (+2.38 mm of reach) and
+complexity**. Closing the fingers pushes `G` forward (+4.99 mm of reach) and
 opening pulls it back — the source of "closing the gripper increases reach".
 
 ### 12.6 Inverse kinematics — "point in, angles out"
@@ -939,12 +1007,12 @@ where noted, an optional `opening`):
 
 | Function | Signature | Returns |
 | --- | --- | --- |
-| `forward_kinematics` | `(theta_base, joint1, joint2, opening=None)` | grip point `CartesianPoint` |
-| `gripper_pose` | `(theta_base, joint1, joint2, opening=None)` | full `FingerGripper` geometry |
-| `finger_tips` | `(theta_base, joint1, joint2, opening=None)` | `tuple` of 3 `CartesianPoint` |
-| `inverse_kinematics` | `(x, y, z, joint2_up=True, opening=None)` | `JointAngles` (deg) |
-| `is_reachable` | `(x, y, z, opening=None)` | `bool` (geometric) |
-| `check_joint_limits` | `(theta_base, joint1, joint2)` | `bool` (physical) |
+| `forward_kinematics` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None)` | grip point `CartesianPoint` |
+| `gripper_pose` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None)` | full `FingerGripper` geometry |
+| `finger_tips` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None)` | `tuple` of 3 `CartesianPoint` |
+| `inverse_kinematics` | `(x, y, z, joint2_up=True, config=DEFAULT_CONFIG, opening=None, joint3=-60.0)` | `JointAngles` (deg); `joint3` may be `"auto"` |
+| `is_reachable` | `(x, y, z, config=DEFAULT_CONFIG, joint3=-60.0, opening=None)` | `bool` (geometric) |
+| `check_joint_limits` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG)` | `bool` (physical) |
 | `requires_joint_limits` | `(theta_base, joint1, joint2)` | `JointAngles` or raises `ValueError` |
 | `verify_fk_ik` | `(n_samples=20, opening=None)` | `(max_pos_err, passed, total)` |
 | `draw_robot` | `(ax, angles, target=None, opening=None, fixed_limits=None)` | draws into a 3D `Axes` |
@@ -954,18 +1022,22 @@ where noted, an optional `opening`):
 | `plot_animation` | `(from_angles, to_angles, target=None, opening=None, frames=60, interval=30)` | animates in its own window (axes stay fixed) |
 | `cli` / `main` | — | the text menu |
 
-**`RobotArm` facade** — a convenience class bound to one config:
+**`RobotArm` facade** — a convenience class bound to one config. **Its kinematic methods
+are currently broken** (see the facade note in §3 for which ones); the module-level
+functions are the supported path:
 
-```python
+```text
 arm = ra.RobotArm()                      # default 300/250/70 arm
 arm.l1, arm.l2, arm.l3, arm.stem_angle   # read-only geometry
-arm.forward_kinematics(45, 30, -20)      # = module fn + self.config
-arm.inverse_kinematics(300, 120, 150, joint2_up=True)
-arm.is_reachable(700, 0, 0)
-arm.check_joint_limits(0, 0, 0)
-arm.gripper_pose(45, 30, -20)
-arm.plot(angles, target=p)               # standalone matplotlib window
-arm.verify(n_samples=50)
+arm.inverse_kinematics(300, 120, 150, joint2_up=True)   # works
+arm.plot(angles, target=p)               # works
+arm.verify(n_samples=50)                 # works
+
+# these four raise TypeError as shipped — they omit joint3:
+#   arm.forward_kinematics(theta_base, joint1, joint2, opening=None)
+#   arm.gripper_pose(theta_base, joint1, joint2, opening=None)
+#   arm.check_joint_limits(theta_base, joint1, joint2)
+#   arm.is_reachable(x, y, z, opening=None)
 ```
 
 ### 12.13 Configuration and derived values (default arm)
@@ -977,7 +1049,7 @@ Configurable (one block at the top of `robot_arm.py`):
 | `L1` | 300 mm | upper arm |
 | `L2` | 250 mm | forearm |
 | `L3` | 70 mm | wrist stem |
-| `WRIST_STEM_ANGLE` | −60° | fixed stem kink, off the forearm |
+| `WRIST_STEM_ANGLE` | −60° | legacy default wrist angle; used only by `_grip_parameters` and the dead `_reach_bounds`. Use the `joint3` argument instead |
 | `GRIPPER_FINGERS` | 3 | finger count (tripod) |
 | `FINGER_LENGTH` | 50 mm | finger segment length |
 | `FINGER_OPENING_DEG` | 30° | full finger spread when open |
@@ -986,18 +1058,27 @@ Configurable (one block at the top of `robot_arm.py`):
 | `POSITION_TOLERANCE_MM` | 0.1 | verification position bar |
 | `REACH_EPSILON_MM` / `MIN_D_SHARE_LIMIT` | 1e-9 | numerical slack/guards |
 
-Derived (computed once, reused by FK/IK/verification via `_grip_parameters`):
+Derived (reused by FK/IK/verification via `_grip_parameters`, which pins the wrist angle
+to `WRIST_STEM_ANGLE = −60°` — i.e. these are the `joint3 = −60°` values):
 
 | Quantity | Open (opening 1) | Closed (opening 0) |
 | --- | --- | --- |
-| grip depth `l_g` | 21.65 mm | 25.0 mm |
-| effective forearm `m_g` | 306.29 mm | 308.67 mm |
-| forearm offset `delta_g` | −15.02° | −15.46° |
-| reach `[min, max]` | [6.29, 606.29] mm | [8.67, 608.67] mm |
+| grip depth `l_g` | 43.30 mm | 50.00 mm |
+| effective forearm `m_g` | 321.97 mm | 326.96 mm |
+| forearm offset `delta_g` | −17.74° | −18.53° |
+| reach `[min, max]` at joint3 −60° | [21.97, 621.97] mm | [26.96, 626.96] mm |
+| reach `[min, max]` at joint3 0° (max) | [63.30, 663.30] mm | [70.00, 670.00] mm |
 
-Note the tiny ~6 mm inner reach bound: `L1` (300 mm) and the effective forearm
-`m_g` (~306 mm) are almost equal, so the arm reaches essentially right up to
-its own base as well as out to ~606 mm.
+Those `l_g` figures use the **full** finger length, `FINGER_LENGTH·cos(spread)`. Earlier
+revisions of this table listed `21.65 / 25.0 mm` and the reach figures that follow from
+them; that was a pre-tripod half-length model (`FINGER_LENGTH/2`) that the code never
+used, and every downstream number in the old table inherited the error. Reach also
+depends on `joint3`, so it is not one pair of numbers at all — see
+[§8](#8-workspace-and-joint-limits--two-separate-ideas).
+
+Note that `L1` (300 mm) and the effective forearm `m_g` (≈ 322 mm) are close but not
+equal, giving a small but non-zero inner bound at the default `joint3`. They become
+*exactly* equal at `joint3 = ±75°`, where the inner bound reaches 0.00 mm.
 
 ### 12.14 Common questions
 
@@ -1024,7 +1105,9 @@ its own base as well as out to ~606 mm.
 
 ### 12.15 Glossary
 
-- **DOF** — degree of freedom; an independently controllable joint (here: 3).
+- **DOF** — degree of freedom; an independently controllable joint (here: 4 - `theta_base`, `joint1`, `joint2`,
+`joint3`). The gripper opening is *not* a DOF; it is a tool parameter that changes
+the reach.
 - **FK / IK** — forward / inverse kinematics.
 - **Grip point** — on-axis centroid of the fingertips; the end-effector.
 - **Effective forearm `m_g`** — the single vector that `L2 + (L3+l_g)` at the
