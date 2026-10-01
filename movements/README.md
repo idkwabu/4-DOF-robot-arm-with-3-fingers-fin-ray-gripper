@@ -129,8 +129,10 @@ gp = ra.gripper_pose(30.0, 45.0, -40.0, -60.0)           # FingerGripper
 tips = ra.finger_tips(30.0, 45.0, -40.0, -60.0)          # tuple of 3 CartesianPoint
 
 # IK: millimetres in, degrees out; the target is a world-frame grip point.
-# Pass joint3="auto" to let the solver pick it.
+# Pass joint3="auto" to let the solver pick it, or "down" to pin the stem vertical.
 angles = ra.inverse_kinematics(300.0, 120.0, 150.0, joint2_up=True)  # JointAngles
+down = ra.inverse_kinematics(300.0, 120.0, 150.0, joint3="down")    # JointAngles
+down.joint1 + down.joint2 + down.joint3                            # -> -90.0
 
 # Workspace + limits (is_reachable also takes joint3, default -60 deg)
 ra.is_reachable(300.0, 120.0, 150.0)          # bool
@@ -555,7 +557,7 @@ gp.grip_point    # on-axis centroid (the FK result)
 
 ```text
 inverse_kinematics(x, y, z, joint2_up=True, config=DEFAULT_CONFIG, opening=None, joint3=-60.0)
-# -> JointAngles [deg]; joint3 may also be the string "auto"
+# -> JointAngles [deg]; joint3 may also be the string "auto" or "down"
 ```
 
 The target `(x, y, z)` is the **grip point** (object centre).
@@ -613,11 +615,72 @@ The target `(x, y, z)` is the **grip point** (object centre).
 > `≈ −126.48°`, `≈ −105.68°`, `≈ −82.43°`, `≈ −53.87°` respectively. (Distances
 > beyond the ≈ 606 mm outer bound, such as `(700, 0, 0)`, are unreachable.)
 
+### The `"down"` mode
+
+The five steps above all assume `joint3` is a free wrist angle **relative to L2**, which
+is why `m_g` and `delta_g` vary and have to be recomputed per candidate. `joint3="down"`
+replaces that with an *absolute* constraint: the stem plus grip depth points straight
+down in the world frame, so
+
+```
+joint1 + joint2 + joint3 == -90°      (STEM_DOWN_ANGLE_DEG, for every pose)
+```
+
+Two things follow.
+
+**It is not `joint3=-90`.** A numeric `joint3` rotates the wrist off the forearm, so
+`joint3=-90` means "forearm bent, wrist hanging off it" and the stem is *not* vertical.
+`"down"` instead chooses whatever `joint3` makes the total come out at −90°.
+
+**It stays closed-form.** The stem is rigid, so with its direction pinned its
+contribution to the grip point is a known constant vector. Peel that vector off the
+target and what is left is a plain two-link `(L1, L2)` problem — steps 2 and 3 above
+with `m_g → L2` and `delta_g → 0` — after which `joint3` is recovered from the
+constraint rather than chosen:
+
+```
+stem  = -90°
+d     = hypot(x, y - L0·0, ...)   # measured on the peeled-off point
+joint1, joint2 = two-link solve    # joint2_up picks the branch
+joint3 = stem - joint1 - joint2
+```
+
+So there is no search, and both elbow branches remain available.
+
+The cost is reach. The peeled-off point must land inside `[|L1 − L2|, L1 + L2]`
+= `[50, 550] mm`, **and** the recovered pose must still satisfy the joint limits. About
+half of the targets reachable with a free wrist have no straight-down solution, and the
+`ValueError` says so:
+
+```python
+try:
+    ra.inverse_kinematics(0, 0, -40, joint3="down")
+except ValueError as exc:
+    print(exc)
+# Target is unreachable with a straight-down wrist: after removing the stem offset the
+# links must span 23.301 mm, outside [50.000, 550.000] mm.
+# Use another joint3 value (or "auto") for this target.
+```
+
+Because each joint is wrapped independently, compare the identity modulo a full turn
+rather than with `==`:
+
+```python
+a = ra.inverse_kinematics(300, 120, 150, joint3="down", opening=1.0)
+sum_ = a.joint1 + a.joint2 + a.joint3
+assert abs((sum_ + 90.0) % 360.0) < 1e-9      # True
+```
+
+`mind/verify_kinematics_down.py` verifies the stem geometrically — by forward
+kinematics of the solved pose, not by trusting the solver's own angle arithmetic — for
+both copies, across every elbow branch and all three gripper openings.
+
 ### Error behavior
 
 IK raises a clear `ValueError` (never NaN/`None`) for targets that are:
 outside the workspace, degenerate (on the base axis), or numerically
-invalid (non-finite input).
+invalid (non-finite input). An unrecognised `joint3` **string** is also rejected, so a
+typo like `"vertical"` fails loudly instead of being read as a wrist angle.
 
 ---
 
@@ -1010,7 +1073,7 @@ where noted, an optional `opening`):
 | `forward_kinematics` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None)` | grip point `CartesianPoint` |
 | `gripper_pose` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None)` | full `FingerGripper` geometry |
 | `finger_tips` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None)` | `tuple` of 3 `CartesianPoint` |
-| `inverse_kinematics` | `(x, y, z, joint2_up=True, config=DEFAULT_CONFIG, opening=None, joint3=-60.0)` | `JointAngles` (deg); `joint3` may be `"auto"` |
+| `inverse_kinematics` | `(x, y, z, joint2_up=True, config=DEFAULT_CONFIG, opening=None, joint3=-60.0)` | `JointAngles` (deg); `joint3` may be `"auto"` or `"down"` |
 | `is_reachable` | `(x, y, z, config=DEFAULT_CONFIG, joint3=-60.0, opening=None)` | `bool` (geometric) |
 | `check_joint_limits` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG)` | `bool` (physical) |
 | `requires_joint_limits` | `(theta_base, joint1, joint2)` | `JointAngles` or raises `ValueError` |

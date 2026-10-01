@@ -401,8 +401,9 @@ Max angle round-trip error: 0.000000 deg
 Samples: 40/40 passed
 ```
 
-`inverse_kinematics()` also supports `joint3="auto"`, which sweeps `joint3` over its full
-range to find the configuration that reaches furthest from the base origin.
+`inverse_kinematics()` takes the wrist as `joint3`, which may be a number of degrees, the
+string `"auto"` (sweep the full range for the configuration that reaches), or `"down"` (pin
+the stem vertical — see [below](#straight-down-wrist-joint3down)).
 
 ---
 
@@ -575,6 +576,49 @@ ra.inverse_kinematics(600, 0, 0, joint3="auto", opening=1.0)
 
 Near targets `(50, 0, 50)` reach it with `joint3 = -75°`, the folded configuration, which
 is why the inner reach bound collapses to nearly zero there.
+
+### Straight-down wrist (`joint3="down"`)
+
+`"auto"` picks *any* wrist angle that fits. Sometimes you want the opposite trade: the
+angle is decided for you, and the reach is whatever falls out. `joint3="down"` pins the
+L3 stem **and** the gripper grip depth straight down in the **world frame**, so the
+gripper always approaches the target along a vertical line:
+
+```python
+import robot_arm as ra
+
+a = ra.inverse_kinematics(300, 120, 150, joint3="down", opening=1.0)
+# -> JointAngles(theta_base=21.801, joint1=73.643, joint2=-90.994, joint3=-72.649)
+a.joint1 + a.joint2 + a.joint3
+# -> -90.0
+```
+
+This is a different constraint from the numeric `joint3` argument, and the distinction
+matters:
+
+| `joint3` value | meaning |
+| --- | --- |
+| a number, e.g. `-60` | wrist angle **relative to L2** — the forearm's own orientation |
+| `"auto"` | any wrist angle that works, nearest −60° first |
+| `"down"` | the stem is **absolutely** vertical, i.e. `joint1 + joint2 + joint3 == -90°` |
+
+So `joint3=-90` is *not* the same request as `joint3="down"`. The first rotates the wrist
+90° off the forearm; the second says the forearm must bend so that the total comes out
+vertical, whatever it takes.
+
+Because the stem is rigid, pinning its direction turns the problem into a plain two-link
+`(L1, L2)` solve: peel the known stem vector off the target, solve the remaining links, then
+recover `joint3` from the constraint. That keeps it closed-form, and it is why the mode
+costs no search. The price is reach — the peeled-off point must land inside the two-link
+envelope, and the pose must also satisfy the joint limits, so roughly **half** of the
+targets reachable by default have a down-wrist solution.
+
+The mode is available in both solver copies (`movements/robot_arm.py` and `Dum-E.py`), and
+`mind/verify_kinematics_down.py` checks that the stem really is vertical in both:
+
+```
+python mind/verify_kinematics_down.py
+```
 
 ---
 
