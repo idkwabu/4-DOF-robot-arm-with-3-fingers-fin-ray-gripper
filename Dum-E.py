@@ -126,6 +126,11 @@ FINGER_SPREAD_DEG = 30.0
 # Where the tool axis sits relative to L2 when the wrist is at rest; used to
 # prefer a natural-looking IK solution over a contorted one.
 WRIST_HOME = -60.0
+# Absolute stem orientation for the ``joint3="down"`` IK mode: the L3 stem plus
+# the gripper grip depth points straight down in the WORLD frame, so
+# ``joint1 + joint2 + joint3 == STEM_DOWN_ANGLE_DEG`` for any reachable pose.
+# Distinct from WRIST_HOME, which is a wrist angle RELATIVE to L2.
+STEM_DOWN_ANGLE_DEG = -90.0
 
 VIZ_ANIM_FRAMES = 30
 VIZ_ANIM_INTERVAL_MS = 30
@@ -1085,6 +1090,71 @@ def _ik_once(
     )
 
 
+def _ik_stem_world(
+    x: float, y: float, z: float, joint2_up: bool, opening: float,
+    config: RobotConfig, stem_deg: float = STEM_DOWN_ANGLE_DEG,
+) -> JointAngles:
+    """Solve IK for a FIXED ABSOLUTE stem orientation, returning degrees.
+
+    Used by the ``joint3="down"`` mode: the L3 stem plus the gripper grip depth
+    points straight down in the WORLD frame, so the returned pose always obeys
+    ``joint1 + joint2 + joint3 == stem_deg`` and the gripper approaches the
+    target along a vertical line however the arm is folded.
+
+    Because the stem is rigid, pinning its absolute direction makes its
+    contribution to the grip point a known constant vector.  Peeling that vector
+    off the target leaves a plain two-link ``(L1, L2)`` problem, which is why
+    this stays closed-form.  ``joint3`` is recovered as a consequence of the
+    constraint, not taken as an input.
+
+    Mirrors the ``y < 0`` folded-back convention used by :func:`inverse_kinematics`
+    so targets behind the base stay reachable.
+    """
+    if y < 0.0:
+        yaw = math.degrees(math.atan2(-y, -x))
+        radial = -math.hypot(x, y)
+    else:
+        yaw = math.degrees(math.atan2(y, x))
+        radial = math.hypot(x, y)
+    height = z - config.l0
+
+    stem = math.radians(stem_deg)
+    tool = _tool_reach(opening, config)  # rigid L3 + grip depth
+
+    # Peel the known stem vector off the target; what remains is what links 1
+    # and 2 alone must reach.
+    radial -= tool * math.cos(stem)
+    height -= tool * math.sin(stem)
+
+    span2 = radial * radial + height * height
+    span = math.sqrt(span2)
+    if span < DEGENERATE_SPAN_MM:
+        raise ValueError("That target sits on the joint1 axis, so the pose is undefined.")
+    lo, hi = abs(config.l1 - config.l2), config.l1 + config.l2
+    if not lo - REACH_EPSILON_MM <= span <= hi + REACH_EPSILON_MM:
+        raise ValueError(
+            f"That target cannot be reached with a straight-down wrist: after "
+            f"removing the stem offset the links must span {span:.1f} mm, outside "
+            f"the [{lo:.1f}, {hi:.1f}] mm available. Pick another wrist angle, or "
+            f"use auto."
+        )
+
+    # Plain two-link solve on the peeled-off point.  _solve_plane is given L2 as
+    # the second link and returns (joint1, joint2 + delta); delta is zero here
+    # because the stem is peeled off rather than folded in, so the second value
+    # is already the physical joint2.
+    joint1, joint2 = _solve_plane(radial, height, config.l2, config, joint2_up)
+    joint3 = stem - joint1 - joint2
+    # `yaw` is deliberately NOT wrapped: this module's base range is 0..180, and
+    # _wrap_deg(180) would return -180 and fall outside it.
+    return JointAngles(
+        yaw,
+        _wrap_deg(math.degrees(joint1)),
+        _wrap_deg(math.degrees(joint2)),
+        _wrap_deg(math.degrees(joint3)),
+    )
+
+
 def inverse_kinematics(
     x: float, y: float, z: float, joint2_up: bool = True,
     joint3: float | str = "auto", opening: float = 1.0,
@@ -1092,8 +1162,10 @@ def inverse_kinematics(
 ) -> JointAngles:
     """Solve for the joint angles that put the grip point on (x, y, z).
 
-    ``joint3`` is a wrist angle in degrees, or ``"auto"`` to let the solver pick
-    one, preferring the natural rest angle.  ``joint2_up`` picks the branch, and
+    ``joint3`` is a wrist angle in degrees RELATIVE to L2, or one of two strings:
+    ``"auto"`` lets the solver pick one, preferring the natural rest angle;
+    ``"down"`` instead pins the stem straight down in the world frame so the
+    gripper approaches vertically.  ``joint2_up`` picks the branch, and
     the other branch is tried too whenever the preferred one cannot be reached.
     Raises ``ValueError`` when no pose inside the joint limits exists.
     """
@@ -1109,6 +1181,29 @@ def inverse_kinematics(
     height = z - config.l0
 
     if isinstance(joint3, str):
+        mode = joint3.strip().lower()
+        if mode == "down":
+            # Absolute stem orientation: joint3 is solved, not chosen, so this
+            # bypasses the auto wrist search.  Both elbow branches are still
+            # tried, and joint limits still apply, exactly as below.
+            last = ""
+            for up in (joint2_up, not joint2_up):
+                try:
+                    pose = _ik_stem_world(x, y, z, up, opening, config)
+                except ValueError as exc:
+                    last = str(exc)
+                    continue
+                if check_joint_limits(pose, config):
+                    return pose
+            raise ValueError(
+                f"No straight-down wrist pose reaches ({x:.1f}, {y:.1f}, {z:.1f}) mm "
+                f"within the joint limits."
+                + (f" Last reason: {last}" if last else "")
+            )
+        if mode != "auto":
+            raise ValueError(
+                f"Unknown joint3 mode {joint3!r}; expected degrees, 'auto', or 'down'."
+            )
         wrists = _wrist_candidates()
     else:
         wrists = (math.radians(float(joint3)),)
@@ -1348,7 +1443,7 @@ def _opt_opening(field: _Field) -> Optional[float]:
     return value
 
 
-JOINT3_CHOICES = ("auto",) + tuple(str(v) for v in range(-60, 151, 5))
+JOINT3_CHOICES = ("auto", "down") + tuple(str(v) for v in range(-60, 151, 5))
 
 
 def state_to_angles(state: dict) -> JointAngles:
@@ -1663,7 +1758,7 @@ class DumEApp:
         y = _req_float(self.v_y, "y")
         z = _req_float(self.v_z, "z")
         raw_j3 = self.v_tgt_j3.get().strip()
-        j3 = raw_j3 if raw_j3 == "auto" else float(raw_j3)
+        j3 = raw_j3 if raw_j3 in ("auto", "down") else float(raw_j3)
         opening = _opt_opening(self.v_open_t)
         target = CartesianPoint(x, y, z)
         angles = inverse_kinematics(x, y, z, joint2_up=self.v_mode.get() != "down",

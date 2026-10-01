@@ -45,6 +45,13 @@ L3: float = 70.0
 # Fixed orientation of L3 relative to L2.
 WRIST_STEM_ANGLE: float = -60.0
 
+# Absolute stem orientation used by the ``joint3="down"`` IK mode: the L3 stem
+# plus the gripper grip depth points straight down in the WORLD frame, so
+# ``joint1 + joint2 + joint3 == STEM_DOWN_ANGLE_DEG`` for any reachable pose.
+# This is a different thing from WRIST_STEM_ANGLE, which is a wrist angle
+# RELATIVE to L2.
+STEM_DOWN_ANGLE_DEG: float = -90.0
+
 # Simulated 3-finger gripper (kinematic end-effector, visual + reachable).
 GRIPPER_FINGERS: int = 3        # number of fingers (3 = tripod, 120 deg apart)
 FINGER_LENGTH: float = 50.0     # length of each finger segment [mm]
@@ -534,6 +541,102 @@ def _ik_rad(
     return joint_angles
 
 
+def _ik_stem_world(
+    x: float,
+    y: float,
+    z: float,
+    joint2_up: bool,
+    config: RobotConfig,
+    opening: float | None = None,
+    stem_deg: float = STEM_DOWN_ANGLE_DEG,
+) -> JointAngles:
+    """Inverse kinematics for a FIXED ABSOLUTE stem orientation.
+
+    Used by the ``joint3="down"`` mode.  Unlike the general solver, which is
+    handed a wrist angle and folds L3 + grip depth into an effective forearm,
+    this one constrains where the stem points in the world: the returned pose
+    always satisfies
+
+        joint1 + joint2 + joint3 == stem_deg
+
+    so the gripper approaches the target along a vertical line no matter how
+    the arm is folded.
+
+    Because the stem is rigid, fixing its absolute direction makes its
+    contribution to the grip point a known constant vector.  Subtracting that
+    vector from the target leaves a plain 2-link ``(L1, L2)`` problem, which is
+    why this is closed-form like the general solver rather than iterative.
+
+    Returns degrees.  Raises ``ValueError`` when the target is unreachable for
+    this wrist orientation.  Joint limits are intentionally NOT applied.
+    """
+    for name, v in (("x", x), ("y", y), ("z", z)):
+        _check_finite(v, name)
+
+    stem = math.radians(stem_deg)
+    spread, _, l_g, _ = _gripper_pose_params(config, opening)
+    tool = config.l3 + l_g  # rigid stem + grip depth, length of the known vector
+
+    # Peel the known stem vector off the target: the remaining point is what
+    # links 1 and 2 alone would have to reach.
+    r = math.hypot(x, y) - tool * math.cos(stem)
+    height = (z - config.l0) - tool * math.sin(stem)
+
+    d2 = r * r + height * height
+    d = math.sqrt(d2)
+    min_reach = abs(config.l1 - config.l2)
+    max_reach = config.l1 + config.l2
+
+    if d <= MIN_D_SHARE_LIMIT:
+        raise ValueError(
+            "Target is too close to the joint1 reference point for a "
+            "straight-down wrist; target is unreachable."
+        )
+
+    if d < min_reach - REACH_EPSILON_MM or d > max_reach + REACH_EPSILON_MM:
+        raise ValueError(
+            f"Target is unreachable with a straight-down wrist: after removing the "
+            f"stem offset the links must span {d:.3f} mm, outside "
+            f"[{min_reach:.3f}, {max_reach:.3f}] mm. Use another joint3 value "
+            f"(or \"auto\") for this target."
+        )
+
+    # Standard 2-link solve on the peeled-off point, same branch pairing and
+    # clamping conventions as _ik_rad.
+    psi = math.atan2(height, r)
+    cos_gamma = (config.l1 * config.l1 + d2 - config.l2 * config.l2) / (2.0 * config.l1 * d)
+    gamma = math.acos(_clamp(cos_gamma, -1.0, 1.0))
+    cos_te = (d2 - config.l1 * config.l1 - config.l2 * config.l2) / (2.0 * config.l1 * config.l2)
+    te = math.acos(_clamp(cos_te, -1.0, 1.0))
+
+    if joint2_up:
+        joint1 = psi + gamma
+        joint2 = -te
+    else:
+        joint1 = psi - gamma
+        joint2 = +te
+
+    # joint3 is a consequence of the constraint, not an input.
+    joint3 = stem - joint1 - joint2
+
+    theta_base = math.atan2(y, x)
+    joint_angles = JointAngles(
+        theta_base=_to_deg(_wrap_angle(theta_base)),
+        joint1=_to_deg(_wrap_angle(joint1)),
+        joint2=_to_deg(_wrap_angle(joint2)),
+        joint3=_to_deg(_wrap_angle(joint3)),
+    )
+    for angle in (
+        joint_angles.theta_base,
+        joint_angles.joint1,
+        joint_angles.joint2,
+        joint_angles.joint3,
+    ):
+        if not math.isfinite(angle):
+            raise ValueError("IK produced a non-finite angle; target is invalid.")
+    return joint_angles
+
+
 def inverse_kinematics(
     x: float,
     y: float,
@@ -553,11 +656,30 @@ def inverse_kinematics(
     non-finite input.  Joint limits are intentionally NOT applied here - use
     ``check_joint_limits`` separately.
 
-    If ``joint3 == "auto"``, the function searches for a joint3 value that makes
-    the target reachable and keeps all joints within their configured limits.
+    ``joint3`` is the L3 wrist angle in degrees RELATIVE to L2, or one of two
+    strings:
+
+    ``"auto"``
+        search for a joint3 that reaches the target within the joint limits.
+    ``"down"``
+        instead solve for joint3 so the stem points straight DOWN in the world
+        frame, i.e. ``joint1 + joint2 + joint3 == -90``.  This constrains the
+        absolute tool orientation rather than the wrist angle relative to the
+        forearm, so the gripper approaches along a vertical line regardless of
+        posture.  The reachable span is narrower than a free wrist: the links
+        must span ``|L1 - L2| <= d <= L1 + L2`` after the stem offset is
+        removed from the target.
     """
-    if joint3 == "auto":
-        return _inverse_kinematics_auto_joint3(x, y, z, joint2_up, config, opening)
+    if isinstance(joint3, str):
+        mode = joint3.strip().lower()
+        if mode == "auto":
+            return _inverse_kinematics_auto_joint3(x, y, z, joint2_up, config, opening)
+        if mode == "down":
+            return _ik_stem_world(x, y, z, joint2_up, config, opening)
+        raise ValueError(
+            f"Unknown joint3 mode {joint3!r}; expected a number in degrees, "
+            f'"auto", or "down".'
+        )
     angles_rad = _ik_rad(x, y, z, joint2_up, config, math.radians(joint3), opening)
     return JointAngles(
         theta_base=_to_deg(angles_rad.theta_base),
@@ -1171,6 +1293,27 @@ def _prompt_frames(default: int = 30) -> int:
     return max(2, n)
 
 
+JOINT3_MODES: Tuple[str, ...] = ("auto", "down")
+
+
+def _parse_joint3_mode(raw: str) -> float | str:
+    """Parse a joint3 entry: blank -> the -60 deg default, a number, or a mode
+    string from :data:`JOINT3_MODES` (``auto`` / ``down``).  Shared by the CLI
+    prompt and the GUI so both accept the same vocabulary."""
+    raw = raw.strip()
+    if raw == "":
+        return -60.0
+    lowered = raw.lower()
+    if lowered in JOINT3_MODES:
+        return lowered
+    try:
+        return float(raw)
+    except ValueError:
+        raise ValueError(
+            f"Invalid joint3 {raw!r}: enter degrees, or one of {', '.join(JOINT3_MODES)}."
+        )
+
+
 def _prompt_ik_target(config: RobotConfig):
     """Shared options 2/5/7 block: target XYZ + elbow mode + opening + joint3 -> IK.
 
@@ -1179,12 +1322,18 @@ def _prompt_ik_target(config: RobotConfig):
     """
     p = _prompt_xyz()
     joint2_up = input("  joint2 pose [up/down] (up): ").strip().lower() != "down"
-    joint3_str = input("  joint3 (deg or 'auto') (-60): ").strip()
-    joint3 = joint3_str if joint3_str == "auto" else (float(joint3_str) if joint3_str else -60.0)
+    joint3_str = input("  joint3 (deg, 'auto', or 'down' for a straight-down wrist) (-60): ").strip()
+    try:
+        joint3 = _parse_joint3_mode(joint3_str)
+    except ValueError as exc:
+        print(f"\n  ERROR: {exc}")
+        return None
     opening = _prompt_opening(config)
-    
-    # For auto joint3, we can't pre-check reachability
-    if joint3 != "auto" and not is_reachable(p.x, p.y, p.z, config, math.radians(joint3), opening):
+
+    # Reachability can only be pre-checked once joint3 is a concrete angle.
+    if not isinstance(joint3, str) and not is_reachable(
+        p.x, p.y, p.z, config, math.radians(joint3), opening
+    ):
         print("\n  ERROR: target is outside the geometric workspace.")
         return None
     try:

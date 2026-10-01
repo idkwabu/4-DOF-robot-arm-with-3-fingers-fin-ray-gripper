@@ -251,7 +251,7 @@ class RobotArmApp:
         self.ik_z = _Field(left, "z (mm)", "150.0")
         row = ttk.Frame(left)
         ttk.Label(row, text="joint3 / L3 tilt (deg)", width=30, anchor="w").pack(side="left")
-        self.ik_j3 = ttk.Combobox(row, values=("auto", "-60", "-55", "-50", "-45", "-40", "-35", "-30", "-25", "-20", "-15", "-10", "-5", "0", "5", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55", "60", "65", "70", "75", "80", "85", "90", "95", "100", "105", "110", "115", "120", "125", "130", "135", "140", "145", "150"), width=10, state="readonly")
+        self.ik_j3 = ttk.Combobox(row, values=("auto", "down", "-60", "-55", "-50", "-45", "-40", "-35", "-30", "-25", "-20", "-15", "-10", "-5", "0", "5", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55", "60", "65", "70", "75", "80", "85", "90", "95", "100", "105", "110", "115", "120", "125", "130", "135", "140", "145", "150"), width=10, state="readonly")
         self.ik_j3.set("auto")
         self.ik_j3.pack(side="left", fill="x", expand=True)
         row.pack(fill="x", pady=3)
@@ -263,7 +263,7 @@ class RobotArmApp:
         y = _req_float(self.ik_y, "y")
         z = _req_float(self.ik_z, "z")
         j3_str = self.ik_j3.get().strip()
-        j3 = j3_str if j3_str == "auto" else float(j3_str)
+        j3 = ra._parse_joint3_mode(j3_str)
         opening = _opt_opening(self.ik_open)
         joint2_up = self.ik_mode.get() != "down"
         return x, y, z, j3, opening, joint2_up
@@ -395,7 +395,7 @@ class RobotArmApp:
         self.v_z = _Field(self.viz_tgt, "z (mm)", "150.0")
         row = ttk.Frame(self.viz_tgt)
         ttk.Label(row, text="joint3 / L3 tilt (deg)", width=30, anchor="w").pack(side="left")
-        self.v_j3 = ttk.Combobox(row, values=("auto", "-60", "-55", "-50", "-45", "-40", "-35", "-30", "-25", "-20", "-15", "-10", "-5", "0", "5", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55", "60", "65", "70", "75", "80", "85", "90", "95", "100", "105", "110", "115", "120", "125", "130", "135", "140", "145", "150"), width=10, state="readonly")
+        self.v_j3 = ttk.Combobox(row, values=("auto", "down", "-60", "-55", "-50", "-45", "-40", "-35", "-30", "-25", "-20", "-15", "-10", "-5", "0", "5", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55", "60", "65", "70", "75", "80", "85", "90", "95", "100", "105", "110", "115", "120", "125", "130", "135", "140", "145", "150"), width=10, state="readonly")
         self.v_j3.set("auto")
         self.v_j3.pack(side="left", fill="x", expand=True)
         row.pack(fill="x", pady=3)
@@ -453,7 +453,7 @@ class RobotArmApp:
         y = _req_float(self.v_y, "y")
         z = _req_float(self.v_z, "z")
         j3_str = self.v_j3.get().strip()
-        j3 = j3_str if j3_str == "auto" else float(j3_str)
+        j3 = ra._parse_joint3_mode(j3_str)
         opening = _opt_opening(self.v_open_t)
         joint2_up = self.v_mode.get() != "down"
         target = ra.CartesianPoint(x, y, z)
