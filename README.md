@@ -20,6 +20,7 @@ handles the phrasing the parser does not recognise.
 - [The language pipeline](#the-language-pipeline)
 - [Direction and angle reference](#direction-and-angle-reference)
 - [Kinematics at a glance](#kinematics-at-a-glance)
+- [Mathematics](#mathematics)
 - [Training the model](#training-the-model)
 - [File formats](#file-formats)
 - [Verification](#verification)
@@ -356,24 +357,40 @@ Not the wrist. The return value is the point between the fingertips, which is wh
 `L3` offset and the finger spread are folded into the result. A sanity check:
 
 ```python
-forward_kinematics(45, 30, -20, -60, DEFAULT_CONFIG, 1.0)
-# -> (409.300, 409.300, 156.618) mm
+import robot_arm as ra
+
+ra.forward_kinematics(45, 30, -20, -60, ra.DEFAULT_CONFIG, 1.0)
+# -> CartesianPoint(x=409.3004, y=409.3004, z=156.6182) mm
 ```
 
 ### Reach envelope
 
-Measured from the `joint1` pivot, which sits at `(0, 0, L0)` in the base frame. The outer
-bound is `L1 + m_g`, where `m_g` is the effective forearm: `L2 + L3` folded through the
-fixed `-60°` wrist stem, plus the finger spread.
+Measured from the `joint1` pivot at `(0, 0, L0)`, **not** from the world origin. The
+envelope is **not a single number** — it depends on `joint3`, because the effective
+forearm `m` is measured from `L2` along a direction set by `joint3`:
 
-| Gripper | `m_g` | `L1 + m_g` | Radial range |
-|---|---|---|---|
-| Fully open (`opening=1.0`) | 321.97 mm | 621.97 mm | **21.97 – 621.97 mm** |
-| Fully closed (`opening=0.0`) | 326.96 mm | 626.96 mm | **26.96 – 626.96 mm** |
+| `joint3` | Open (`opening=1`) | Closed (`opening=0`) |
+|---|---|---|
+| −150° | 137.90 – 462.10 mm | 142.08 – 457.92 mm |
+| −120° | 83.18 – 516.82 mm | 83.44 – 516.56 mm |
+| −90° | 25.52 – 574.48 mm | 22.69 – 577.31 mm |
+| −60° (default) | 21.97 – 621.97 mm | 26.96 – 626.96 mm |
+| −30° | 52.70 – 652.70 mm | 58.97 – 658.97 mm |
+| **0°** | 63.30 – **663.30 mm** | 70.00 – **670.00 mm** |
+| +60° | 21.97 – 621.97 mm | 26.96 – 626.96 mm |
+| +90° | 25.52 – 574.48 mm | 22.69 – 577.31 mm |
+| +150° | 137.90 – 462.10 mm | 142.08 – 457.92 mm |
 
-`l_g`, the signed finger radius, is `-0.31 mm` open and `-0.32 mm` closed — the fingertips
-effectively meet at the axis, which is what makes the gripper close cleanly. The inner
-bound is the non-zero clearance at full extension of the elbow, not zero.
+**Maximum reach is 663.30 mm open / 670.00 mm closed, at `joint3 = 0°`** — not at the
+`joint3 = -60°` default, which is the figure most references quote.
+
+The inner bound is a signed quantity reported as a distance. `m` crosses `L1 = 300 mm`
+at `joint3 ≈ -75°`, where the reported inner bound collapses to 0.001 mm; on either side
+of that the arm can reach essentially its own base. See
+[known issue 14](#14-absl1---m-hides-a-sign-change).
+
+Closing the gripper *raises both bounds*: the on-axis grip depth `l_g` grows from
+43.30 mm to 50.00 mm as the fingers converge, which lengthens the effective forearm.
 
 ### Verification
 
@@ -387,6 +404,178 @@ Samples: 40/40 passed
 
 `inverse_kinematics()` also supports `joint3="auto"`, which sweeps `joint3` over its full
 range to find the configuration that reaches furthest from the base origin.
+
+---
+
+## Mathematics
+
+All angles are stored in radians internally; every public function takes and returns
+degrees. Lengths are millimetres. This section documents what `movements/robot_arm.py`
+actually computes — each equation is paired with its verified value.
+
+### Grip geometry
+
+The three fingers sit on a cone about the tool axis. `opening` scales their spread:
+
+```
+spread = FINGER_OPENING_DEG · opening            spread ∈ [0°, 30°]
+l_g    = FINGER_LENGTH · cos(spread)             on-axis grip depth [mm]
+```
+
+`l_g` is the projection of a finger onto the tool axis. Because it is a **cosine**, the
+depth is *shortest* when the fingers are most open:
+
+| `opening` | `spread` | `cos(spread)` | `l_g` |
+|---|---|---|---|
+| 1.00 (open) | 30.0° | 0.866025 | 43.301 mm |
+| 0.75 | 22.5° | 0.923880 | 46.194 mm |
+| 0.50 | 15.0° | 0.965926 | 48.296 mm |
+| 0.25 | 7.5° | 0.991445 | 49.572 mm |
+| 0.00 (closed) | 0.0° | 1.000000 | 50.000 mm |
+
+At `opening = 0` the fingers converge **on** the tool axis at depth `FINGER_LENGTH`, so
+the three tips and the grip point coincide.
+
+### The effective forearm
+
+This is the central trick, and the reason the arm is tractable.
+
+`L2`, `L3` and the grip depth `l_g` are rigidly fixed relative to each other, so their
+*vector sum* can be collapsed into a single magnitude and offset angle. Treating the
+plane as complex numbers:
+
+```
+z  ≡ L2 + (L3 + l_g) · e^(iφ),   φ = WRIST_STEM_ANGLE = -60°
+m  = |z|            effective forearm length
+δ  = arg(z)         effective forearm offset angle
+```
+
+`m` is the distance from `joint2` to the grip point when the forearm is straight; `δ` is
+how far the folded tool axis is rotated away from `L2`. Together they turn a **three-link
+arm into a plain two-link arm** with links `(L1, m)`.
+
+For the stem alone, with no finger contribution:
+
+```
+m = |250 + 70·e^(i(-60°))| = 291.376 mm      δ = -12.008°
+```
+
+Compare that with the naive `L2 + L3 = 320 mm`. Folding saves **28.624 mm**, because `L3`
+is pitched −60° rather than collinear with `L2`. Treating the links as a simple sum
+overstates the arm's length by nearly a tenth.
+
+### Forward kinematics
+
+FK never builds a rotation matrix. It accumulates in a **radial–height plane**, then
+rotates the whole result by the base angle at the end — which is why the base joint
+cannot tilt the arm, only spin it.
+
+With `r` the horizontal distance from the Z axis and `z` the height:
+
+```
+joint1     : r = 0                       z = L0
+link 2     : r₂ = L1 · cos(joint1)
+             z₂ = L0 + L1 · sin(joint1)
+link 3     : r₃ = r₂ + L2 · cos(joint1 + joint2)
+             z₃ = z₂ + L2 · sin(joint1 + joint2)
+link 4     : r_m = r₃ + L3 · cos(joint1 + joint2 + joint3)
+             z_m = z₃ + L3 · sin(joint1 + joint2 + joint3)
+base spin  : x = r_m · cos(θ_base)      y = r_m · sin(θ_base)
+```
+
+Note that each link angle is the **sum** of every joint above it — absolute link
+orientations, not relative deltas. The grip point then advances a further `l_g` along the
+tool axis, whose unit vector is
+`ax = (cos(γ)cos(θ_base), cos(γ)sin(θ_base), sin(γ))` with `γ = joint1 + joint2 + joint3`.
+
+Worked example, the `up` preset `(90, 120, -60, -30)`:
+
+```
+r₂ = 300·cos(120°)              = -150.000   z₂ = 50 + 300·sin(120°)   = 309.808
+r₃ = -150 + 250·cos(60°)        =  -25.000   z₃ = 309.808 + 250·sin(60°)= 526.314
+r_m = -25 + 70·cos(30°)         =   35.622   z_m = 526.314 + 70·sin(30°)= 561.314
+x   = 35.622·cos(90°)           =    0.000   y   = 35.622·sin(90°)      =  35.622
+```
+
+The grip point then advances `l_g = 43.301` mm along the tool axis, whose unit vector at
+`γ = 30°` is `(0, 0.866025, 0.500000)`, giving `(0.00, 73.12, 582.96)` mm. Verify it
+yourself:
+
+```python
+import robot_arm as ra
+
+ra.forward_kinematics(90, 120, -60, -30, ra.DEFAULT_CONFIG, 1.0)
+# -> CartesianPoint(x=0.0, y=73.1218, z=582.9646) mm
+```
+
+### The distance identity
+
+Because of the effective forearm, the grip point obeys a two-link law of cosines. Let
+`d` be the distance from the `joint1` pivot to the target — **measured from the pivot, not
+the world origin**:
+
+```
+d² = L1² + m² + 2 · L1 · m · cos(joint2 + δ)
+```
+
+This single equation is what makes IK a short closed form rather than a numerical search.
+It has been verified across 2880 poses with a maximum error of **2.3 × 10⁻¹³ mm**.
+
+It also yields the reach bounds, `d ∈ [|L1 - m|, L1 + m]`, and it explains why `joint2`
+depends only on `d` — a consequence shared by every target at the same distance.
+
+### Inverse kinematics
+
+Five steps, no iteration:
+
+```
+1.  θ_base = atan2(y, x)                       the base isolates the azimuth
+2.  r = √(x² + y²)                             collapse to the radial–height plane
+    height = z - L0
+    d = √(r² + height²)
+3.  cos(te′) = (d² - L1² - m²) / (2 · L1 · m)  law of cosines, te′ = joint2 + δ
+    te_abs = acos(clamp(cos(te′), -1, 1))
+4.  ψ = atan2(height, r)                       bearing of the target
+    γ = acos(clamp((L1² + d² - m²) / (2 · L1 · d), -1, 1))
+5.  joint1 = ψ ± γ                             ± chosen by joint2_up
+    joint2 = ±te_abs - δ                       the δ is removed to get the physical angle
+```
+
+The signs are forced, not free: `joint2_up=True` gives `joint1 = ψ + γ` and
+`te′ = -te_abs`, while `joint2_up=False` gives `joint1 = ψ - γ` and `te′ = +te_abs`.
+Either way `joint2 = te′ - δ`, because `δ` was folded into `m` on the way in and must come
+back out.
+
+Targets outside `[|L1 - m|, L1 + m]`, or within `MIN_D_SHARE_LIMIT` of the pivot, raise
+`ValueError`. Joint limits are deliberately **not** applied here — use
+`check_joint_limits()` separately. Geometric reachability and joint limits are two
+different questions; see [issue 2](#2-the-two-kinematic-copies-have-different-joint-limits).
+
+```python
+import robot_arm as ra
+
+a = ra.inverse_kinematics(300, 0, 200, joint2_up=True, opening=1.0)
+# JointAngles(theta_base=0.0, joint1=87.15, joint2=-97.10, joint3=-60.0)
+ra.forward_kinematics(a.theta_base, a.joint1, a.joint2, a.joint3, ra.DEFAULT_CONFIG, 1.0)
+# -> (300.00, 0.00, 200.00) mm, exactly on target
+```
+
+### Automatic `joint3` selection
+
+Because `m` depends on `joint3`, a target that is unreachable at one wrist angle may be
+reachable at another. `joint3="auto"` sweeps the full `joint3` range in 5° steps,
+preferring values nearest the −60° default, and returns the first configuration that is
+both geometrically reachable and inside every joint limit:
+
+```python
+import robot_arm as ra
+
+ra.inverse_kinematics(600, 0, 0, joint3="auto", opening=1.0)
+# -> JointAngles(theta_base=0.0, joint1=10.298, joint2=-11.331, joint3=-60.0)
+```
+
+Near targets `(50, 0, 50)` reach it with `joint3 = -75°`, the folded configuration, which
+is why the inner reach bound collapses to nearly zero there.
 
 ---
 
@@ -682,17 +871,22 @@ layout and is gitignored.
 
 ### 10. Sub-documentation is stale
 
-- `movements/README.md` is titled 4-DOF, but its glossary at line 1027 defines DOF as
-  "an independently controllable joint (here: **3**)". Its examples construct
-  `JointAngles` with three positional arguments against a four-field dataclass (lines 138,
-  142, 143, 253). Its effective-forearm table gives `m_g = 306.29 mm` and a reach envelope
-  of `6.29 – 606.29 mm`, where the code produces `m_g = 321.97 mm` and
-  `21.97 – 621.97 mm`.
+- `movements/README.md` is titled 4-DOF, but its glossary (line 1027) incorrectly states
+  "an independently controllable joint (here: **3**)". Its code examples build
+  `JointAngles` with three positional arguments (lines 138, 142, 143, 253, 962-966) against
+  a four-field dataclass. Its derived-values table (line 993-996) and associated prose
+  assume `l_g = finger_length/2 · cos(spread)` — a pre-tripod half-length model — which
+  produces `m_g = 306.29 mm` and `6.29 – 606.29 mm`. The actual code uses
+  `l_g = FINGER_LENGTH · cos(spread)` (43.30 mm open), so it produces `m_g = 321.97 mm`
+  and a **joint3-dependent** reach envelope with a maximum of **663.30 mm** at
+  `joint3 = 0°`. That is the root cause of the discrepancy — the document and code are
+  mathematically consistent with different gripper models.
 - `mind/README-DUM-E.txt` line 128 reports `test_resolver.py` as having 211 assertions
   where the suite now runs 736.
 
-Both are flagged here rather than corrected, so this README stays the single source of
-truth. Trust the source over both.
+These are corrected in the updated `movements/README.md` alongside this release, but
+historical copies elsewhere may still show the stale numbers. Trust the source code over
+both sub-documents for numeric values.
 
 ### 11. `features_macro/hand_recognition.py` is empty
 
@@ -706,6 +900,35 @@ It was tracked but described a different system: an ESP32/Arduino C++ firmware w
 repository. It was the design ancestor of the current `{"action", "direction"}` flow, not
 documentation of it, so the deletion is committed and the file is gitignored.
 
+### 13. The reach envelope depends on `joint3`, and dead code hides it
+
+There are **two** functions that compute reach bounds:
+
+| Function | Line | Uses |
+|---|---|---|
+| `_reach_bounds` | 206 | `φ` pinned to `WRIST_STEM_ANGLE` — **dead code, never called** |
+| `_reach_bounds_with_joint3` | 439 | `φ = joint3` — used by `is_reachable` at line 659 |
+
+The live path is correct. The dead one is only accidentally right when
+`joint3 == WRIST_STEM_ANGLE == -60°`, which is the default, so its wrong answer looks
+plausible. An earlier revision of this README published `21.97 – 621.97 mm` as *the*
+reach envelope, taken from the dead function's assumption. Maximum reach is in fact
+**663.30 mm** open / **670.00 mm** closed at `joint3 = 0°`.
+
+`_reach_bounds` should be deleted, or made `joint3`-aware, so the two cannot disagree
+again.
+
+### 14. `abs(L1 - m)` hides a sign change
+
+The inner reach bound is reported as `abs(L1 - m)`, but `L1 - m` is genuinely **negative**
+across most of the range: `m` exceeds `L1 = 300 mm` for any `joint3` between roughly
+−73° and +73°.
+
+At `joint3 ≈ -75°` the two are equal and the reported inner bound collapses to
+**0.001 mm** — the arm can reach its own base. That is correct as a *distance*, and it is
+the number a caller should compare against, but it hides the fact that the arm is fully
+folded there. The signed value is the more informative quantity.
+
 ---
 
 ## Further documentation
@@ -713,10 +936,10 @@ documentation of it, so the deletion is committed and the file is gitignored.
 | Document | Contents | Reliability |
 |---|---|---|
 | `mind/README-DUM-E.txt` | Full parser and resolver reference, every rule, every regex | Current, except the assertion count |
-| `movements/README.md` | Kinematics derivation, signed-radius reasoning, effective forearm | Partly stale — see issue 9 |
+| `movements/README.md` | Kinematics derivation, signed-radius reasoning, effective forearm | Corrected in this release — equations, examples and reach values all re-derived from source |
 | `mind/system_prompt.txt` | The model's exact contract | Source of truth |
 
-For anything the two sub-documents disagree on, the source code wins.
+For anything the sub-documents disagree on, the source code wins.
 
 ---
 
