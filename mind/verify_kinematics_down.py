@@ -31,6 +31,10 @@ _spec.loader.exec_module(dume)
 STEM_DOWN_DEG = -90.0
 TOL_MM = 1e-6
 TOL_DEG = 1e-6
+# Polyline arc length is a hair under the true arc length (49.984 vs 50.000 at
+# 12 samples), so the claw shape checks use a looser bar than the kinematic ones.
+CLAW_TOL_MM = 5e-2
+RIGID_TOL_MM = 1e-9
 
 # A spread that covers all four quadrants, the folded-back region behind the
 # base, and both the reach envelope and its edges.
@@ -59,7 +63,10 @@ class Copy:
     so every check below stays identical across both.
     """
 
-    def __init__(self, name, l3, solve, pose, forward, limits, declared_axis=None):
+    def __init__(
+        self, name, l3, solve, pose, forward, limits, declared_axis=None,
+        finger_length=None, grip_depth=None,
+    ):
         self.name = name
         self.l3 = l3
         self._solve = solve
@@ -67,6 +74,8 @@ class Copy:
         self._forward = forward
         self._limits = limits
         self._declared_axis = declared_axis
+        self.finger_length = finger_length
+        self.grip_depth = grip_depth
 
     def solve(self, target, joint2_up, opening, joint3):
         return self._solve(target, joint2_up, opening, joint3)
@@ -84,6 +93,16 @@ class Copy:
         """L3 link vector, pointing from the wrist toward the gripper mount."""
         mount, wrist = pose.gripper_mount, pose.joint3
         return (mount.x - wrist.x, mount.y - wrist.y, mount.z - wrist.z)
+
+    def paths(self, pose):
+        """Each finger's centreline, base to tip, as (x, y, z) tuples."""
+        return [
+            tuple((point.x, point.y, point.z) for point in path)
+            for path in pose.finger_paths
+        ]
+
+    def point(self, point):
+        return (point.x, point.y, point.z)
 
 
 COPIES = (
@@ -103,6 +122,8 @@ COPIES = (
             a.theta_base, a.joint1, a.joint2, a.joint3
         ),
         declared_axis="axis",
+        finger_length=robot_arm.FINGER_LENGTH,
+        grip_depth=robot_arm.GRIP_DEPTH,
     ),
     Copy(
         name="Dum-E.py",
@@ -113,6 +134,8 @@ COPIES = (
         pose=lambda a, opening: dume.gripper_pose(a, opening),
         forward=lambda a, opening: dume.forward_kinematics(a, opening),
         limits=lambda a: dume.check_joint_limits(a),
+        finger_length=dume.FINGER_LENGTH,
+        grip_depth=dume.GRIP_DEPTH,
     ),
 )
 
@@ -161,6 +184,73 @@ def check_target(copy, target, opening):
         error = point_error(copy.grip_point(angles, opening), target)
         if error > TOL_MM:
             raise AssertionError(f"round-trip error {error:.3e} mm")
+
+
+def check_claw(copy):
+    """The fingers are rigid curled talons, and opening cannot move the arm.
+
+    Four geometric properties, none of which read the solver's own arithmetic:
+      * rigidity   -- each finger's centreline is one fixed-length curve;
+      * closure    -- at opening 0 the tips meet the on-axis grip point;
+      * decoupling -- the grip point does not move when the fingers swing;
+      * travel     -- the fingers really do open, rather than being frozen.
+    """
+    failures = []
+    angles = copy.solve(TARGETS[0], True, 1.0, "down")
+
+    # Rigidity: one path per finger, constant arc length across every opening.
+    lengths = []
+    for opening in (0.0, 0.25, 0.5, 0.75, 1.0):
+        paths = copy.paths(copy.pose(angles, opening))
+        if len(paths) != 3:
+            failures.append(f"opening={opening}: {len(paths)} finger paths, expected 3")
+            continue
+        for path in paths:
+            if len(path) < 2:
+                failures.append(f"opening={opening}: a finger path is a single point")
+                continue
+            lengths.append(
+                sum(math.dist(path[i], path[i + 1]) for i in range(len(path) - 1))
+            )
+
+    if lengths:
+        variation = max(lengths) - min(lengths)
+        if variation > RIGID_TOL_MM:
+            failures.append(
+                f"finger arc length varies by {variation:.3e} mm across openings"
+                " (finger is not rigid)"
+            )
+        if abs(max(lengths) - copy.finger_length) > CLAW_TOL_MM:
+            failures.append(
+                f"finger arc length {max(lengths):.4f} mm != {copy.finger_length:g} mm"
+            )
+
+    # Closure: at opening 0 every fingertip meets the on-axis grip point.
+    grip = copy.point(copy.grip_point(angles, 0.0))
+    for index, path in enumerate(copy.paths(copy.pose(angles, 0.0))):
+        gap = math.dist(path[-1], grip)
+        if gap > CLAW_TOL_MM:
+            failures.append(f"closed finger {index + 1} tip is {gap:.4f} mm off the axis")
+
+    # Decoupling: opening swings the fingers but must not move the grasp point.
+    drift = 0.0
+    for opening in (0.0, 0.25, 0.5, 0.75, 1.0):
+        drift = max(drift, math.dist(copy.point(copy.grip_point(angles, opening)), grip))
+    if drift > TOL_MM:
+        failures.append(
+            f"grip point drifts {drift:.3e} mm with the opening"
+            " (opening leaked into the kinematics)"
+        )
+
+    # Travel: the fingers genuinely open, rather than being frozen.
+    travel = max(
+        math.dist(path[-1], grip)
+        for path in copy.paths(copy.pose(angles, 1.0))
+    )
+    if travel < 1.0:
+        failures.append(f"fingers do not open: max tip travel {travel:.3f} mm")
+
+    return failures
 
 
 def check_copy(copy):
@@ -248,6 +338,9 @@ def check_copy(copy):
     if share <= 0.0:
         failures.append("down mode reaches nothing")
 
+    # 8. The gripper is a rigid claw and its opening cannot move the arm.
+    failures.extend(check_claw(copy))
+
     stats = {
         "checked": checked,
         "folded": (folded_ok, len(folded)),
@@ -269,6 +362,7 @@ def main() -> int:
         print(f"  folded-back targets solved: {stats['folded'][0]}/{stats['folded'][1]}")
         print(f"  down covers {stats['covered']}/{stats['pool']} = {stats['share']:.1%}"
               " of default-reachable targets")
+        print("  fingers rigid, close on the axis, and fixed grasp point: checked")
         for line in failures:
             print(f"  FAIL {line}")
         all_failures.extend(f"{copy.name}: {line}" for line in failures)

@@ -123,6 +123,25 @@ L3 = 70.0
 FINGER_COUNT = 3
 FINGER_LENGTH = 50.0
 FINGER_SPREAD_DEG = 30.0
+# A finger is one RIGID curved bar (a talon), not a straight segment and not a
+# hinged chain: its curvature never changes, and `opening` only swings the whole
+# piece about its base.  FINGER_CURL_DEG is how far it curls inward.
+FINGER_CURL_DEG = 60.0
+# Finger base ring radius, sized so a fully closed finger's tip lands exactly
+# on the tool axis, letting a curled finger close *onto* the axis.
+#   R_arc  = FINGER_LENGTH / radians(FINGER_CURL_DEG)
+#   R_base = R_arc * (1 - cos(FINGER_CURL_DEG))
+FINGER_ARC_RADIUS = FINGER_LENGTH / math.radians(FINGER_CURL_DEG)
+FINGER_BASE_RADIUS = FINGER_ARC_RADIUS * (1.0 - math.cos(math.radians(FINGER_CURL_DEG)))
+# On-axis grip depth, a CONSTANT: the grasp point is the object centre, which
+# does not move when the fingers swing.  Deriving it from the finger angle
+# instead (as finger_length*cos(spread) once did) leaked the opening into the
+# kinematic chain, so one target solved to different joints at different
+# openings.  Value = R_arc * sin(FINGER_CURL_DEG), the depth at which the tips
+# meet the axis when closed.
+GRIP_DEPTH = FINGER_ARC_RADIUS * math.sin(math.radians(FINGER_CURL_DEG))
+# Sampled centreline of each rigid finger, for drawing the claw as a curve.
+FINGER_PATH_SAMPLES = 12
 # Where the tool axis sits relative to L2 when the wrist is at rest; used to
 # prefer a natural-looking IK solution over a contorted one.
 WRIST_HOME = -60.0
@@ -822,6 +841,7 @@ class RobotConfig:
     finger_count: int = FINGER_COUNT
     finger_length: float = FINGER_LENGTH
     finger_spread: float = FINGER_SPREAD_DEG
+    finger_curl: float = FINGER_CURL_DEG
 
     @property
     def gripper_opening(self) -> float:
@@ -854,6 +874,9 @@ class GripperPose:
     gripper_mount: CartesianPoint
     spread: float
     fingertips: tuple[CartesianPoint, ...]
+    # Each rigid finger's centreline from base to tip, so the claw can be drawn
+    # as a curve; `fingertips` is the last point of each path.
+    finger_paths: tuple[tuple[CartesianPoint, ...], ...] = ()
 
 
 CONFIG = RobotConfig()
@@ -910,6 +933,71 @@ def gripper_spread(opening: float, config: RobotConfig = CONFIG) -> float:
     return math.radians(config.finger_spread) * opening
 
 
+def _finger_curl(config: RobotConfig) -> float:
+    """Total inward curl of one rigid finger, in radians."""
+    return math.radians(config.finger_curl)
+
+
+def _finger_arc_radius(config: RobotConfig) -> float:
+    """Radius of the circular arc a rigid finger follows."""
+    alpha = _finger_curl(config)
+    return config.finger_length / alpha if alpha else config.finger_length
+
+
+def _finger_base_radius(config: RobotConfig) -> float:
+    """Radius of the ring the finger bases sit on, so closed tips meet the axis."""
+    return _finger_arc_radius(config) * (1.0 - math.cos(_finger_curl(config)))
+
+
+def _grip_depth(config: RobotConfig) -> float:
+    """On-axis depth of the grasp centre in mm.  A CONSTANT, so the gripper
+    opening never reaches the arm's kinematics."""
+    return _finger_arc_radius(config) * math.sin(_finger_curl(config))
+
+
+def _finger_arc(
+    mount: CartesianPoint,
+    axis: CartesianPoint,
+    radial: CartesianPoint,
+    spread: float,
+    config: RobotConfig,
+    samples: int = FINGER_PATH_SAMPLES,
+) -> tuple[CartesianPoint, ...]:
+    """Centreline of ONE rigid curled finger, from base to tip.
+
+    The finger is a circular arc of fixed curvature -- a talon.  It is one rigid
+    piece: there is no joint anywhere along it, and the opening only swings the
+    whole piece about its base.  With arc radius ``R``, total curl ``alpha`` and
+    arc length ``L``, the tangent has swept ``theta(s) = spread - alpha*s/L`` by
+    arc length ``s``, so integrating the tangent gives
+
+        axial(s)  = R * (sin(spread) - sin(spread - alpha*s/L))
+        radial(s) = R_base + R * (cos(spread - alpha*s/L) - cos(spread))
+
+    Both expressions are continuous as ``alpha -> 0``, where they reduce to the
+    straight finger ``s*cos(spread)`` / ``s*sin(spread)``; that limit is handled
+    explicitly to avoid dividing by zero.
+    """
+    alpha = _finger_curl(config)
+    length = config.finger_length
+    arc = _finger_arc_radius(config)
+    base_radius = _finger_base_radius(config)
+
+    points: list[CartesianPoint] = []
+    for index in range(samples + 1):
+        s = length * index / samples
+        if alpha <= 1e-12:
+            axial, rad_off = s * math.cos(spread), s * math.sin(spread)
+        else:
+            theta = spread - alpha * s / length
+            axial = arc * (math.sin(spread) - math.sin(theta))
+            rad_off = base_radius + arc * (math.cos(theta) - math.cos(spread))
+        points.append(
+            _add(mount, _add(_scale(axis, axial), _scale(radial, rad_off)))
+        )
+    return tuple(points)
+
+
 def _plane_pose(angles: JointAngles, config: RobotConfig) -> tuple[float, ...]:
     """Radial-Z plane solution: (r2, h2, r3, h3, rg, hg, a1, a2, a3)."""
     a1 = math.radians(angles.joint1)
@@ -930,7 +1018,9 @@ def _place(radial: float, height: float, yaw: float) -> CartesianPoint:
 
 def _tool_reach(opening: float, config: RobotConfig) -> float:
     """Distance from the wrist joint to the grip point along the tool axis."""
-    return config.l3 + config.finger_length * math.cos(gripper_spread(opening, config))
+    # The grip depth is a constant, so `opening` is accepted for API stability
+    # but no longer reaches the kinematic chain.
+    return config.l3 + _grip_depth(config)
 
 
 def forward_kinematics(
@@ -964,15 +1054,15 @@ def gripper_pose(
     first = _unit(_cross(axis, helper))
     second = _cross(axis, first)
     tips: list[CartesianPoint] = []
+    paths: list[tuple[CartesianPoint, ...]] = []
     for index in range(config.finger_count):
         azimuth = 2.0 * math.pi * index / config.finger_count
         radial_dir = _add(
             _scale(first, math.cos(azimuth)), _scale(second, math.sin(azimuth))
         )
-        direction = _add(
-            _scale(axis, math.cos(spread)), _scale(radial_dir, math.sin(spread))
-        )
-        tips.append(_add(mount, _scale(direction, config.finger_length)))
+        path = _finger_arc(mount, axis, radial_dir, spread, config)
+        paths.append(path)
+        tips.append(path[-1])
 
     return GripperPose(
         joint1=j1,
@@ -981,6 +1071,7 @@ def gripper_pose(
         gripper_mount=mount,
         spread=spread,
         fingertips=tuple(tips),
+        finger_paths=tuple(paths),
     )
 
 
@@ -998,12 +1089,17 @@ def _reach_bounds_with_joint3(
     L3 and the finger extension form one rigid piece that sits at ``joint3`` to
     the forearm, so forearm and wrist add up as a single vector before the
     triangle inequality with L1 is applied.
+
+    ``opening`` is accepted for API stability but no longer changes the result:
+    the grip depth is a constant (``_grip_depth``), so there is one envelope per
+    ``joint3`` rather than a family of them.
     """
-    wrist = config.l3 + config.finger_length * math.cos(gripper_spread(opening, config))
+    stem = config.l3 + _grip_depth(config)
     phi = math.radians(joint3)
     forearm = math.hypot(
-        config.l2 + wrist * math.cos(phi), wrist * math.sin(phi)
+        config.l2 + stem * math.cos(phi), stem * math.sin(phi)
     )
+
     return abs(config.l1 - forearm), config.l1 + forearm
 
 
@@ -1301,6 +1397,8 @@ def animation_limits(
         pose = gripper_pose(angles, opening, config)
         points.extend([pose.joint1, pose.joint2, pose.joint3, pose.gripper_mount])
         points.extend(pose.fingertips)
+        for path in pose.finger_paths:
+            points.extend(path)
         points.append(forward_kinematics(angles, opening, config))
     if isinstance(target, CartesianPoint):
         points.append(target)
@@ -1357,9 +1455,12 @@ def draw_robot(
                       color="tab:orange", s=70, marker="o", label="joint 2")
     axis_view.scatter(pose.joint3.x, pose.joint3.y, pose.joint3.z,
                       color="tab:blue", s=100, marker="*", label="joint 3")
-    for tip in pose.fingertips:
-        axis_view.plot([pose.gripper_mount.x, tip.x], [pose.gripper_mount.y, tip.y],
-                       [pose.gripper_mount.z, tip.z], color="tab:cyan", linewidth=0.8)
+    for k, tip in enumerate(pose.fingertips):
+        # The finger is a rigid curved bar, so plot its sampled centreline as a
+        # polyline.  Fall back to a straight segment for a pose built without paths.
+        path = pose.finger_paths[k] if k < len(pose.finger_paths) else (pose.gripper_mount, tip)
+        axis_view.plot([p.x for p in path], [p.y for p in path], [p.z for p in path],
+                       color="tab:cyan", linewidth=1.6)
         axis_view.scatter(tip.x, tip.y, tip.z, color="tab:cyan", s=15)
     axis_view.scatter(goal.x, goal.y, goal.z, color="tab:red", s=25)
     if isinstance(target, CartesianPoint):

@@ -339,8 +339,9 @@ agrees with it. Where anything still conflicts, the source is correct.
 | `L3` | 70 mm | Wrist link, driven by `joint3` |
 | `WRIST_STEM_ANGLE` | -60° | Fixed wrist-to-finger offset |
 | `GRIPPER_FINGERS` | 3 | |
-| `FINGER_LENGTH` | 50 mm | |
-| `FINGER_OPENING_DEG` | 30° | Half-angle of the finger cone |
+| `FINGER_LENGTH` | 50 mm | Arc length of one rigid finger |
+| `FINGER_OPENING_DEG` | 30° | Max swing of a finger off the tool axis |
+| `FINGER_CURL_DEG` | 60° | Fixed inward curl of the rigid finger |
 | `POSITION_TOLERANCE_MM` | 0.1 mm | FK/IK agreement tolerance |
 
 ### Four joints, three arm links
@@ -359,37 +360,40 @@ Not the wrist. The return value is the point between the fingertips, which is wh
 import robot_arm as ra
 
 ra.forward_kinematics(45, 30, -20, -60, ra.DEFAULT_CONFIG, 1.0)
-# -> CartesianPoint(x=409.3004, y=409.3004, z=156.6182) mm
+# -> CartesianPoint(x=408.4134, y=408.4134, z=158.1133) mm
 ```
 
 ### Reach envelope
 
 Measured from the `joint1` pivot at `(0, 0, L0)`, **not** from the world origin. The
-envelope is **not a single number** — it depends on `joint3`, because the effective
-forearm `m` is measured from `L2` along a direction set by `joint3`:
+envelope depends on `joint3`, because the effective forearm `m` is measured from `L2`
+along a direction set by `joint3`. It does **not** depend on the gripper opening — the
+grasp point is a fixed on-axis depth, so there is one envelope per `joint3`:
 
-| `joint3` | Open (`opening=1`) | Closed (`opening=0`) |
-|---|---|---|
-| −150° | 137.90 – 462.10 mm | 142.08 – 457.92 mm |
-| −120° | 83.18 – 516.82 mm | 83.44 – 516.56 mm |
-| −90° | 25.52 – 574.48 mm | 22.69 – 577.31 mm |
-| −60° (default) | 21.97 – 621.97 mm | 26.96 – 626.96 mm |
-| −30° | 52.70 – 652.70 mm | 58.97 – 658.97 mm |
-| **0°** | 63.30 – **663.30 mm** | 70.00 – **670.00 mm** |
-| +60° | 21.97 – 621.97 mm | 26.96 – 626.96 mm |
-| +90° | 25.52 – 574.48 mm | 22.69 – 577.31 mm |
-| +150° | 137.90 – 462.10 mm | 142.08 – 457.92 mm |
+| `joint3` | Reach |
+|---|---|
+| −150° | 136.65 – 463.35 mm |
+| −120° | 83.06 – 516.94 mm |
+| −90° | 26.32 – 573.68 mm |
+| −60° (default) | 20.52 – 620.52 mm |
+| −30° | 50.88 – 650.88 mm |
+| **0°** | 61.35 – **661.35 mm** |
+| +60° | 20.52 – 620.52 mm |
+| +90° | 26.32 – 573.68 mm |
+| +150° | 136.65 – 463.35 mm |
 
-**Maximum reach is 663.30 mm open / 670.00 mm closed, at `joint3 = 0°`** — not at the
-`joint3 = -60°` default, which is the figure most references quote.
+**Maximum reach is 661.35 mm, at `joint3 = 0°`** — not at the `joint3 = −60°` default,
+which is the figure most references quote.
 
 The inner bound is a signed quantity reported as a distance. `m` crosses `L1 = 300 mm`
 at `joint3 = ±75°`, where the reported inner bound collapses to 0.00 mm; on either side
 of that the arm can reach essentially its own base. See
 [known issue 14](#14-absl1---m-hides-a-sign-change).
 
-Closing the gripper *raises both bounds*: the on-axis grip depth `l_g` grows from
-43.30 mm to 50.00 mm as the fingers converge, which lengthens the effective forearm.
+Earlier revisions had the grip depth fall as the fingers opened (`l_g = FINGER_LENGTH·cos(spread)`),
+which made the envelope a *family* of curves — one per opening. The fingers are now rigid
+curled talons and `l_g` is the **constant** 41.35 mm, so the opening splay no longer touches
+the arm's kinematics at all. See [known issue 15](#15-opening-once-leaked-into-the-kinematic-chain).
 
 ### Verification
 
@@ -415,26 +419,42 @@ actually computes — each equation is paired with its verified value.
 
 ### Grip geometry
 
-The three fingers sit on a cone about the tool axis. `opening` scales their spread:
+Each finger is a **rigid curled talon**: a circular arc of fixed curvature. It is one
+solid piece — there is no joint anywhere along it — and `opening` only swings the whole
+piece about its base:
 
 ```
-spread = FINGER_OPENING_DEG · opening            spread ∈ [0°, 30°]
-l_g    = FINGER_LENGTH · cos(spread)             on-axis grip depth [mm]
+spread = FINGER_OPENING_DEG · opening              swing of the whole finger ∈ [0°, 30°]
+R_arc  = FINGER_LENGTH / radians(FINGER_CURL_DEG)  arc radius       = 47.75 mm
+R_base = R_arc · (1 − cos(FINGER_CURL_DEG))        base ring radius = 23.87 mm
+l_g    = R_arc · sin(FINGER_CURL_DEG)              grip depth       = 41.35 mm  (constant)
 ```
 
-`l_g` is the projection of a finger onto the tool axis. Because it is a **cosine**, the
-depth is *shortest* when the fingers are most open:
+The three finger bases sit on a ring of radius `R_base` around the tool axis rather than
+all sharing one point. That is what lets a curled finger close *onto* the axis instead of
+through it. The tip traces
 
-| `opening` | `spread` | `cos(spread)` | `l_g` |
+```
+axial(s)  = R_arc · [sin(spread) − sin(spread − curl·s/L)]
+radial(s) = R_base + R_arc · [cos(spread − curl·s/L) − cos(spread)]
+```
+
+so at `opening = 0` every tip lands exactly on the axis at depth `l_g`, and the three tips
+and the grip point coincide. As `FINGER_CURL_DEG → 0` this reduces to a straight finger,
+`axial = s·cos(spread)`, `radial = s·sin(spread)`.
+
+Crucially, the grip depth `l_g` is a **constant** — it no longer depends on the spread:
+
+| `opening` | `spread` | tip off axis | tip depth |
 |---|---|---|---|
-| 1.00 (open) | 30.0° | 0.866025 | 43.301 mm |
-| 0.75 | 22.5° | 0.923880 | 46.194 mm |
-| 0.50 | 15.0° | 0.965926 | 48.296 mm |
-| 0.25 | 7.5° | 0.991445 | 49.572 mm |
-| 0.00 (closed) | 0.0° | 1.000000 | 50.000 mm |
+| 0.00 (closed) | 0.0° | 0.00 mm | 41.35 mm |
+| 0.25 | 7.5° | 5.60 mm | 44.11 mm |
+| 0.50 | 15.0° | 11.52 mm | 46.12 mm |
+| 0.75 | 22.5° | 17.64 mm | 47.34 mm |
+| 1.00 (open) | 30.0° | 23.87 mm | 47.75 mm |
 
-At `opening = 0` the fingers converge **on** the tool axis at depth `FINGER_LENGTH`, so
-the three tips and the grip point coincide.
+The tip swings outward as the gripper opens, but the grasp centre — the point IK aims
+at — never moves.
 
 ### The effective forearm
 
@@ -497,15 +517,15 @@ r_m = -25 + 70·cos(30°)         =   35.622   z_m = 526.314 + 70·sin(30°)= 56
 x   = 35.622·cos(90°)           =    0.000   y   = 35.622·sin(90°)      =  35.622
 ```
 
-The grip point then advances `l_g = 43.301` mm along the tool axis, whose unit vector at
-`γ = 30°` is `(0, 0.866025, 0.500000)`, giving `(0.00, 73.12, 582.96)` mm. Verify it
+The grip point then advances `l_g = 41.350` mm along the tool axis, whose unit vector at
+`γ = 30°` is `(0, 0.866025, 0.500000)`, giving `(0.00, 71.43, 581.99)` mm. Verify it
 yourself:
 
 ```python
 import robot_arm as ra
 
 ra.forward_kinematics(90, 120, -60, -30, ra.DEFAULT_CONFIG, 1.0)
-# -> CartesianPoint(x=0.0, y=73.1218, z=582.9646) mm
+# -> CartesianPoint(x=0.0, y=71.4316, z=581.9888) mm
 ```
 
 ### The distance identity
@@ -916,11 +936,16 @@ layout and is gitignored.
 
 Both sub-documents previously carried numbers derived from a gripper model the code never
 used: `l_g = finger_length/2 · cos(spread)`, a pre-tripod **half-length** model. Under it,
-`m_g = 306.29 mm` and reach is `6.29 – 606.29 mm`. The code uses the full
+`m_g = 306.29 mm` and reach is `6.29 – 606.29 mm`. The code then used the full
 `l_g = FINGER_LENGTH · cos(spread)` (43.30 mm open), giving `m_g = 321.97 mm` at
-`joint3 = -60°` and a **joint3-dependent** envelope whose maximum is 663.30 mm at
+`joint3 = -60°` and a **joint3-dependent** envelope whose maximum was 663.30 mm at
 `joint3 = 0°`. The document and the code were mathematically consistent with *different*
 gripper models; that, not a typo, is why every downstream number was off.
+
+That full-length model has itself since been replaced: the fingers are now rigid curled
+talons and the grip depth is the constant `l_g = 41.35 mm` (see
+[issue 15](#15-opening-once-leaked-into-the-kinematic-chain)). The current figures are
+`m_g = 320.53 mm` at `joint3 = -60°` and a maximum reach of **661.35 mm** at `joint3 = 0°`.
 
 Also stale and now fixed:
 
@@ -960,7 +985,7 @@ The live path is correct. The dead one is only accidentally right when
 `joint3 == WRIST_STEM_ANGLE == -60°`, which is the default, so its wrong answer looks
 plausible. An earlier revision of this README published `21.97 – 621.97 mm` as *the*
 reach envelope, taken from the dead function's assumption. Maximum reach is in fact
-**663.30 mm** open / **670.00 mm** closed at `joint3 = 0°`.
+**661.35 mm**, at `joint3 = 0°`.
 
 `_reach_bounds` should be deleted, or made `joint3`-aware, so the two cannot disagree
 again.
@@ -976,6 +1001,22 @@ At `joint3 = ±75°` exactly, `m = L1`, and the reported inner bound collapses t
 **0.00 mm** — the arm can reach its own base. That is correct as a *distance*, and it is
 the number a caller should compare against, but it hides the fact that the arm is fully
 folded there. The signed value is the more informative quantity.
+
+### 15. Opening once leaked into the kinematic chain
+
+The grip depth used to be computed from the finger spread,
+`l_g = FINGER_LENGTH · cos(spread)`, which is a property of the *gripper* but was fed
+straight into the effective forearm `m_g = |L2 + (L3 + l_g)·e^(i·joint3)|`. Because `spread`
+depends on the opening, opening the gripper moved the grasp point, changed the reach
+envelope, and made IK return *different joints for the same target* — at fixed joints the
+grip point slid 6.70 mm along the tool axis, which re-aimed the whole arm.
+
+`l_g` is now the constant `GRIP_DEPTH = 41.35 mm`, the depth at which the rigid curled
+fingers meet the axis when closed, and `_gripper_pose_params` no longer derives it from the
+opening. The opening only swings the fingers. `mind/verify_kinematics_down.py` asserts the
+grip point is identical across every opening to machine precision. The `opening` arguments
+on `is_reachable`, `_reach_bounds_with_joint3` and `verify_fk_ik` are kept for API
+stability but no longer affect their results.
 
 ---
 
