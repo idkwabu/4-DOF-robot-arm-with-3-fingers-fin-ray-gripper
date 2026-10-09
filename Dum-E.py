@@ -1388,18 +1388,49 @@ def interpolate_joints(
     return tuple(out)
 
 
+def interpolate_opening(
+    start: float, end: float, frames: int = VIZ_ANIM_FRAMES
+) -> tuple[float, ...]:
+    """Grip opening on the same smoothstep as interpolate_joints.
+
+    The gripper has no motor, but the fingers are still actuated: this returns
+    exactly ``frames`` openings so the fingers open/close in step with the arm
+    instead of snapping.  ``[0] == start`` and ``[-1] == end``.
+    """
+    if frames < 2:
+        raise ValueError("Animation must contain at least two frames.")
+    values: list[float] = []
+    for index in range(frames):
+        t = index / (frames - 1)
+        eased = t * t * (3.0 - 2.0 * t)  # smoothstep
+        values.append(start + (end - start) * eased)
+    values[0] = start
+    values[-1] = end
+    return tuple(values)
+
+
 def animation_limits(
     frames: Iterable[JointAngles], opening: float = 1.0, target: Any = None,
     config: RobotConfig = CONFIG,
 ) -> tuple[tuple[float, float], ...]:
+    frames = list(frames)
+    if opening is None or isinstance(opening, (int, float)):
+        openings = [opening] * len(frames)
+    else:
+        openings = list(opening)
+        if len(openings) != len(frames):
+            raise ValueError(
+                f"opening sequence length {len(openings)} does not match "
+                f"frame count {len(frames)}."
+            )
     points: list[CartesianPoint] = []
-    for angles in frames:
-        pose = gripper_pose(angles, opening, config)
+    for angles, op in zip(frames, openings):
+        pose = gripper_pose(angles, op, config)
         points.extend([pose.joint1, pose.joint2, pose.joint3, pose.gripper_mount])
         points.extend(pose.fingertips)
         for path in pose.finger_paths:
             points.extend(path)
-        points.append(forward_kinematics(angles, opening, config))
+        points.append(forward_kinematics(angles, op, config))
     if isinstance(target, CartesianPoint):
         points.append(target)
     reach = (config.l0 + config.l1 + config.l2 + config.l3) * 0.55
@@ -1462,10 +1493,33 @@ def draw_robot(
         axis_view.plot([p.x for p in path], [p.y for p in path], [p.z for p in path],
                        color="tab:cyan", linewidth=1.6)
         axis_view.scatter(tip.x, tip.y, tip.z, color="tab:cyan", s=15)
+    # Palm: spokes + a base-ring outline tie the finger bases (a ring around
+    # the tool axis) back to the wrist tip so the claw looks attached to the arm.
+    bases = [path[0] for path in pose.finger_paths]
+    for index, base_pt in enumerate(bases):
+        if math.dist(
+            (pose.gripper_mount.x, pose.gripper_mount.y, pose.gripper_mount.z),
+            (base_pt.x, base_pt.y, base_pt.z),
+        ) > 1e-9:
+            axis_view.plot(
+                [pose.gripper_mount.x, base_pt.x],
+                [pose.gripper_mount.y, base_pt.y],
+                [pose.gripper_mount.z, base_pt.z],
+                color="dimgray", linewidth=2,
+                label="palm" if index == 0 else None,
+            )
+    if len(bases) >= 2:
+        ring = bases + [bases[0]]
+        axis_view.plot([p.x for p in ring], [p.y for p in ring], [p.z for p in ring],
+                       color="dimgray", linewidth=2)
     axis_view.scatter(goal.x, goal.y, goal.z, color="tab:red", s=25)
     if isinstance(target, CartesianPoint):
-        axis_view.scatter(target.x, target.y, target.z, color="tab:green", s=60,
-                          marker="+", label="target")
+        axis_view.plot(
+            [pose.gripper_mount.x, target.x],
+            [pose.gripper_mount.y, target.y],
+            [pose.gripper_mount.z, target.z],
+            color="tab:green", linestyle=":", linewidth=1, label="target",
+        )
 
     axis_view.set_xlabel("X (mm)")
     axis_view.set_ylabel("Y (mm)")
@@ -1579,6 +1633,7 @@ class DumEApp:
         self._angles: Optional[JointAngles] = state_to_angles(self.state)
         self._opening: float = float(self.state["gripper"]) / 100.0
         self._anim_frames: tuple = ()
+        self._anim_openings: tuple = ()
         self._anim_limits = None
         self._anim_idx = 0
         self._anim_job = None
@@ -1830,11 +1885,17 @@ class DumEApp:
         self.state = load_state()
         self._refresh_pose_labels()
         goal = state_to_angles(self.state)
-        self._opening = float(self.state["gripper"]) / 100.0
+        target_opening = float(self.state["gripper"]) / 100.0
+        start_opening = (self._opening if self._opening is not None
+                         else self.cfg.gripper_opening)
         # Animating a pose the arm is already holding would just burn a second
-        # of redraws, so only move when something actually changes.
-        animate = not (self._angles and _same_pose(self._angles, goal))
-        self._goto_viz_angles(goal, self._opening, animate=animate)
+        # of redraws, so only move when the pose OR the grip opening changes
+        # (opening the fingers is itself a motion worth animating).
+        pose_changed = self._angles is None or not _same_pose(self._angles, goal)
+        opening_changed = abs(target_opening - start_opening) > 1e-6
+        animate = pose_changed or opening_changed
+        self._goto_viz_angles(goal, target_opening, animate=animate,
+                              from_opening=start_opening)
         # Movement and home have no other exit, so they have to clear the
         # "Thinking..." that submit_command set. Without this the line stayed
         # stuck on Thinking even though the parser had answered instantly.
@@ -1897,7 +1958,10 @@ class DumEApp:
             messagebox.showerror("DUM-E", str(exc))
             return
         start = self._angles or state_to_angles(self.state)
-        if _same_pose(start, goal):
+        start_opening = (self._opening if self._opening is not None
+                         else self.cfg.gripper_opening)
+        target_opening = self.cfg.gripper_opening if opening is None else opening
+        if _same_pose(start, goal) and abs(target_opening - start_opening) <= 1e-6:
             self._draw(goal, opening, target)
             messagebox.showinfo(
                 "DUM-E",
@@ -1906,10 +1970,15 @@ class DumEApp:
             )
             return
         self._anim_frames = interpolate_joints(start, goal)
-        self._anim_limits = animation_limits(self._anim_frames, opening, target, self.cfg)
+        self._anim_openings = interpolate_opening(
+            start_opening, target_opening, len(self._anim_frames)
+        )
+        self._anim_limits = animation_limits(
+            self._anim_frames, self._anim_openings, target, self.cfg
+        )
         self._anim_idx = 0
         self._anim_target = target
-        self._anim_opening = opening
+        self._anim_opening = target_opening
         self._anim_stop_requested = False
         self.viz_anim_btn.configure(text="Stop")
         self.viz_plot_btn.configure(state="disabled")
@@ -1920,8 +1989,9 @@ class DumEApp:
             self._anim_finish()
             return
         angles = self._anim_frames[self._anim_idx]
+        opening = self._anim_openings[self._anim_idx]
         self._anim_idx += 1
-        self._draw(angles, self._anim_opening, self._anim_target, self._anim_limits)
+        self._draw(angles, opening, self._anim_target, self._anim_limits)
         if self._anim_idx >= len(self._anim_frames):
             self._anim_finish()
         elif not self._anim_stop_requested:
@@ -1943,7 +2013,7 @@ class DumEApp:
         self.viz_plot_btn.configure(state="normal")
 
     def _goto_viz_angles(self, angles: JointAngles, opening=None, target=None,
-                         animate: bool = False) -> None:
+                         animate: bool = False, from_opening=None) -> None:
         """Move the arm to a pose without disturbing the chosen mode.
 
         A typed command calls this, and the user may still be part way through
@@ -1952,11 +2022,20 @@ class DumEApp:
         in the Remembered pose panel, which _apply_command refreshes.
         """
         if animate:
-            self._anim_frames = interpolate_joints(self._angles or angles, angles)
-            self._anim_limits = animation_limits(self._anim_frames, opening, None, self.cfg)
+            target_opening = self.cfg.gripper_opening if opening is None else opening
+            if from_opening is None:
+                from_opening = target_opening
+            start_angles = self._angles or angles
+            self._anim_frames = interpolate_joints(start_angles, angles)
+            self._anim_openings = interpolate_opening(
+                from_opening, target_opening, len(self._anim_frames)
+            )
+            self._anim_limits = animation_limits(
+                self._anim_frames, self._anim_openings, None, self.cfg
+            )
             self._anim_idx = 0
             self._anim_target = None
-            self._anim_opening = opening
+            self._anim_opening = target_opening
             self._anim_stop_requested = False
             self.viz_anim_btn.configure(text="Stop")
             self.viz_plot_btn.configure(state="disabled")

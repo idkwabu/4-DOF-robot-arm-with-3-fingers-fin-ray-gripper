@@ -63,6 +63,13 @@ def _same_pose(a: ra.JointAngles, b: ra.JointAngles, tol: float = 1e-3) -> bool:
     )
 
 
+def _same_opening(a: float | None, b: float | None, tol: float = 1e-6) -> bool:
+    """True when two grip openings are (numerically) equal (None == None)."""
+    if a is None or b is None:
+        return a is b
+    return abs(a - b) <= tol
+
+
 class _Output(ttk.Frame):
     """A scrollable, read-only text area for a tab's results."""
 
@@ -149,6 +156,7 @@ class RobotArmApp:
         self._current_target = None
         self._current_opening = None
         self._anim_frames: tuple = ()
+        self._anim_openings: tuple = ()
         self._anim_limits = None
         self._anim_idx = 0
         self._anim_job = None
@@ -496,7 +504,10 @@ class RobotArmApp:
             messagebox.showerror("DUM-E", str(exc))
             return
         start = self._current_angles or ra.HOME_ANGLES
-        if _same_pose(start, to_angles):
+        start_opening = (self._current_opening if self._current_opening is not None
+                         else self.cfg.gripper_opening)
+        target_opening = self.cfg.gripper_opening if opening is None else opening
+        if _same_pose(start, to_angles) and _same_opening(start_opening, target_opening):
             # Nothing would visibly move; draw once and tell the user why.
             self._draw(to_angles, target, opening)
             messagebox.showinfo(
@@ -507,10 +518,15 @@ class RobotArmApp:
             )
             return
         self._anim_frames = ra.interpolate_joints(start, to_angles, VIZ_ANIM_FRAMES)
-        self._anim_limits = ra.animation_limits(self._anim_frames, self.cfg, opening, target)
+        self._anim_openings = ra.interpolate_opening(
+            start_opening, target_opening, VIZ_ANIM_FRAMES
+        )
+        self._anim_limits = ra.animation_limits(
+            self._anim_frames, self.cfg, self._anim_openings, target
+        )
         self._anim_idx = 0
         self._anim_target = target
-        self._anim_opening = opening
+        self._anim_opening = target_opening
         self._anim_stop_requested = False
         self.viz_anim_btn.configure(text="Stop")
         self.viz_plot_btn.configure(state="disabled")
@@ -521,8 +537,9 @@ class RobotArmApp:
             self._anim_finish()
             return
         angles = self._anim_frames[self._anim_idx]
+        opening = self._anim_openings[self._anim_idx]
         self._anim_idx += 1
-        self._draw(angles, self._anim_target, self._anim_opening,
+        self._draw(angles, self._anim_target, opening,
                    fixed_limits=self._anim_limits)
         if self._anim_idx >= len(self._anim_frames):
             self._anim_finish()  # last frame drawn; no trailing tick

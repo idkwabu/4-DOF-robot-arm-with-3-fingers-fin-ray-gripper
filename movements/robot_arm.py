@@ -1102,20 +1102,33 @@ def _plot_points_for_pose(
 def animation_limits(
     poses: Sequence[JointAngles],
     config: RobotConfig = DEFAULT_CONFIG,
-    opening: float | None = None,
+    opening: float | Sequence[float] | None = None,
     target: CartesianPoint | None = None,
 ):
     """Equal-aspect axis limits that enclose EVERY pose in a trajectory.
 
     Used by the animation so the axes stay rock-steady for the whole motion
     instead of re-scaling on every frame (which would zoom/pan the view).
+    ``opening`` may be a single value (applied to every pose) or one entry
+    per pose, so a trajectory whose fingers open/close is still enclosed.
     Falls back to a small unit box for an empty trajectory.
     """
     import numpy as np
 
+    poses = list(poses)
+    if opening is None or isinstance(opening, (int, float)):
+        openings = [opening] * len(poses)
+    else:
+        openings = list(opening)
+        if len(openings) != len(poses):
+            raise ValueError(
+                f"opening sequence length {len(openings)} does not match "
+                f"pose count {len(poses)}."
+            )
+
     xs, ys, zs = [], [], []
-    for angles in poses:
-        points = _plot_points_for_pose(angles, config, opening, target)
+    for angles, op in zip(poses, openings):
+        points = _plot_points_for_pose(angles, config, op, target)
         xs.extend(p.x for p in points)
         ys.extend(p.y for p in points)
         zs.extend(p.z for p in points)
@@ -1144,7 +1157,7 @@ def draw_robot(
     opening: float | None = None,
     fixed_limits=None,
 ) -> None:
-    """Draw the arm, fingers, grip point and optional target onto an existing
+    """Draw the arm, fingers, palm and optional target onto an existing
     3D ``Axes`` (degrees in).  Shared by the CLI and the tkinter GUI so both
     render identically; the axes are cleared first, the canvas is re-used
     for consecutive poses.  By default the view centres on both the pose and
@@ -1194,12 +1207,29 @@ def draw_robot(
         )
         ax.scatter(tip.x, tip.y, tip.z, color="tab:cyan", s=15, marker="o", label="fingertip" if k == 0 else None)
 
-    # Optional IK target marker.
+    # Palm: the finger bases sit on a ring around the tool axis, so spokes and
+    # a base-ring outline tie them back to the wrist tip -- otherwise the claw
+    # looks detached from the arm.  Purely visual, no kinematics involved.
+    bases = [path[0] for path in gripper.finger_paths]
+    for index, base_pt in enumerate(bases):
+        if math.dist(gripper_mount.coords(), base_pt.coords()) > 1e-9:
+            ax.plot(
+                [gripper_mount.x, base_pt.x], [gripper_mount.y, base_pt.y],
+                [gripper_mount.z, base_pt.z],
+                color="dimgray", linewidth=2, label="palm" if index == 0 else None,
+            )
+    if len(bases) >= 2:
+        ring = bases + [bases[0]]
+        ax.plot(
+            [p.x for p in ring], [p.y for p in ring], [p.z for p in ring],
+            color="dimgray", linewidth=2,
+        )
+
+    # Optional IK target: a thin dotted connector to the wrist, no bulky marker.
     if target is not None:
-        ax.scatter(target.x, target.y, target.z, color="tab:red", s=160, marker="+", label="target")
         ax.plot(
             [gripper_mount.x, target.x], [gripper_mount.y, target.y], [gripper_mount.z, target.z],
-            color="tab:red", linestyle=":", linewidth=1,
+            color="tab:red", linestyle=":", linewidth=1, label="target",
         )
 
     ax.set_xlabel("X [mm]")
@@ -1287,6 +1317,31 @@ def interpolate_joints(
     return tuple(poses)
 
 
+def interpolate_opening(
+    from_opening: float,
+    to_opening: float,
+    frames: int = 60,
+) -> Tuple[float, ...]:
+    """Gripper opening on the same ease-in-out curve as interpolate_joints.
+
+    Closed-form grip opening is a *tool setting*, not a joint, but the fingers
+    are still actuated, so they should open/close in step with the arm rather
+    than snap.  This returns exactly ``frames`` values with
+    ``values[0] == from_opening`` and ``values[-1] == to_opening``; pass the
+    matching ``frames`` to :func:`interpolate_joints` so the two line up 1:1.
+    """
+    if frames < 2:
+        raise ValueError(f"frames must be >= 2, got {frames}.")
+    values = []
+    for k in range(frames):
+        t = k / (frames - 1)
+        ease = t * t * (3.0 - 2.0 * t)  # smoothstep ease-in-out
+        values.append(from_opening + (to_opening - from_opening) * ease)
+    values[0] = from_opening
+    values[-1] = to_opening
+    return tuple(values)
+
+
 def plot_animation(
     from_angles: JointAngles,
     to_angles: JointAngles,
@@ -1295,25 +1350,31 @@ def plot_animation(
     target: CartesianPoint | None = None,
     frames: int = 60,
     interval: int = 30,
+    from_opening: float | None = None,
 ) -> None:
     """Animate a smooth joint-space transition in its OWN window (blocks).
 
     Steps ``interpolate_joints(...)`` through the shared ``draw_robot()``
-    primitive, keeping the optional red ``+`` target visible.  The 3D axes
-    are pinned to ``animation_limits(...)`` so the view never re-scales
-    while the arm moves.
+    primitive, keeping the optional dotted red line to the target visible.  ``opening`` is
+    the target grip opening; pass ``from_opening`` to ramp the fingers from
+    their current opening to it (otherwise the opening is held constant).
+    The 3D axes are pinned to ``animation_limits(...)`` so the view never
+    re-scales while the arm moves.
     """
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation
 
     poses = interpolate_joints(from_angles, to_angles, frames)
+    target_opening = config.gripper_opening if opening is None else opening
+    start_opening = target_opening if from_opening is None else from_opening
+    openings = interpolate_opening(start_opening, target_opening, frames)
 
     fig, ax = _new_3d_axes()
     # Whole-trajectory limits so the axes never re-scale while the arm moves.
-    limits = animation_limits(poses, config, opening, target)
+    limits = animation_limits(poses, config, openings, target)
 
     def draw_frame(k: int) -> Tuple[list, ...]:
-        draw_robot(ax, poses[k], config, target, opening, fixed_limits=limits)
+        draw_robot(ax, poses[k], config, target, openings[k], fixed_limits=limits)
         return ax.collections + ax.lines
 
     anim = FuncAnimation(fig, draw_frame, frames=frames, interval=interval,
@@ -1489,6 +1550,7 @@ MENU = """
 def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
     """Text menu driving the kinematics + visualization stages."""
     last_angles = HOME_ANGLES  # pose the animation transitions FROM
+    last_opening = config.gripper_opening  # opening the animation transitions FROM
     while True:
         print(MENU)
         choice = input("Select option: ").strip()
@@ -1498,6 +1560,7 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
             opening = _prompt_opening(config)
             p = forward_kinematics(a.theta_base, a.joint1, a.joint2, config, opening)
             last_angles = a
+            last_opening = config.gripper_opening if opening is None else opening
             print(
                 f"\n  Grip point: x={p.x:.3f} mm, y={p.y:.3f} mm, z={p.z:.3f} mm  "
                 f"(opening {config.gripper_opening if opening is None else opening:.3f})"
@@ -1540,6 +1603,7 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
             if not check_joint_limits(a.theta_base, a.joint1, a.joint2, a.joint3, config):
                 print("  NOTE: angles exceed configured joint limits.")
             last_angles = a
+            last_opening = config.gripper_opening if opening is None else opening
             plot_robot(a, config=config, opening=opening)
 
         elif choice == "5":  # Visualize From XYZ Target
@@ -1560,6 +1624,7 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
             if not check_joint_limits(a.theta_base, a.joint1, a.joint2, a.joint3, config):
                 print("  NOTE: solution exceeds configured joint limits.")
             last_angles = a
+            last_opening = config.gripper_opening if opening is None else opening
             plot_robot(a, config=config, target=p, opening=opening)
 
         elif choice == "6":  # Verification
@@ -1571,26 +1636,32 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
             if got is None:
                 continue
             p, _, opening, a = got
+            target_opening = config.gripper_opening if opening is None else opening
             frames = _prompt_frames()
-            if all(
+            poses_same = all(
                 abs(getattr(last_angles, f) - getattr(a, f)) < 1e-3
                 for f in ("theta_base", "joint1", "joint2", "joint3")
-            ):
+            )
+            if poses_same and abs(last_opening - target_opening) < 1e-6:
                 print("\n  NOTE: start and target poses are identical - nothing to animate.")
                 continue
             print(
-                f"\n  Animating joint-space transition:"
+                f"\n  Animating transition:"
                 f"\n    start  base={last_angles.theta_base:8.3f}  "
                 f"joint1={last_angles.joint1:8.3f}  joint2={last_angles.joint2:8.3f}  joint3={last_angles.joint3:8.3f} deg"
+                f"  opening={last_opening:.3f}"
                 f"\n    target base={a.theta_base:8.3f}  "
                 f"joint1={a.joint1:8.3f}  joint2={a.joint2:8.3f}  joint3={a.joint3:8.3f} deg"
+                f"  opening={target_opening:.3f}"
             )
             if not check_joint_limits(a.theta_base, a.joint1, a.joint2, a.joint3, config):
                 print("  NOTE: target pose exceeds configured joint limits.")
             plot_animation(
-                last_angles, a, config=config, opening=opening, target=p, frames=frames
+                last_angles, a, config=config, opening=opening, target=p, frames=frames,
+                from_opening=last_opening,
             )
             last_angles = a
+            last_opening = target_opening
 
         elif choice == "8":  # Exit
             print("Goodbye.")

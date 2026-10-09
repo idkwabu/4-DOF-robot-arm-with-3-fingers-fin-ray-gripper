@@ -31,7 +31,8 @@ point.
 **Stage scope:** forward kinematics, inverse kinematics, workspace validation,
 joint-limit validation, FK→IK→FK verification, a 3D visualization — plus
 **smooth joint-space animations** between poses (CLI option `7` and the GUI
-`Animate` button) — available both as a text CLI (`robot_arm.py`) and as a
+`Animate` button), in which the gripper opening is animated *in step* with the
+arm rather than snapping — available both as a text CLI (`robot_arm.py`) and as a
 **tkinter desktop GUI** (`robot_arm_gui.py`) with the 5 workflow stages.
 Deliberately **not** implemented: Arduino, serial, servo control, camera,
 vision, speech, LLM/AI, web, databases, motion planning.
@@ -103,14 +104,15 @@ Draw the arm at `base yaw=30°, joint1/L1=45°, joint2/L2=-40°`:
 | `2` | Target `(x, y, z)` mm → joint angles (deg), with joint2-pose choice and limit check |
 | `3` | Is a target reachable? (the reach depends on `joint3`, not the opening) |
 | `4` | Joint angles → 3D plot of the robot + fingers |
-| `5` | Target `(x, y, z)` → IK → 3D plot of the robot + target marker |
+| `5` | Target `(x, y, z)` → IK → 3D plot of the robot + target |
 | `6` | Run the FK→IK→FK verification suite |
-| `7` | Smooth joint-space animation from the last drawn pose to an IK target |
+| `7` | Smooth transition from the last drawn pose to an IK target, easing the joints and the gripper opening together |
 | `8` | Exit |
 
 Options `1`–`7` additionally ask for an optional **gripper opening** (0..1;
 Enter keeps the config default `gripper_opening`); option `7` also asks for
-the **animation frame count** (Enter keeps 30).
+the **animation frame count** (Enter keeps 30) and eases the opening from the
+last drawn opening to the target opening.
 
 ---
 
@@ -242,8 +244,8 @@ joint limits before relying on it.
 
 
 **Option `5` — Visualize From XYZ Target** opens a matplotlib window
-(3 fingers drawn in cyan, grip point as a small green wireframe octahedron).
-Confirm the target (`red +`) sits exactly on the green grip-point marker: run
+(3 fingers drawn in cyan, plus a thin dotted red connector from the wrist to
+the target). Confirm the drawn pose reaches the target you asked for: run
 option `5` with the same `(300, 120, 150)` and check the recon-FK line:
 
 ```
@@ -265,8 +267,9 @@ Samples: 40/40 passed
 
 **Option `7` — Animate To Target** solves IK for a target and then plays a
 joint-space transition from the current pose to the IK pose, with the elbow
-branch fixed for the whole move so the arm cannot flip mid-animation. Targets
-outside the geometric workspace are rejected with an error.
+branch fixed for the whole move so the arm cannot flip mid-animation and the
+grip opening eased in step with the joints. Targets outside the geometric
+workspace are rejected with an error.
 
 **Option `8`** quits.
 
@@ -359,7 +362,7 @@ values into the fields, press the button, read the result:
 | **IK** | grip-point target (mm) + opening + joint2 pose | joint angles, limit check, round-trip error |
 | **Reachability** | target (mm) + joint3 | reachable?, `d`, reach `[min, max]` bounds for the chosen `joint3` (opening shown but inert) |
 | **Verification** | `n_samples` + opening | FK→IK→FK PASS/FAIL suite output |
-| **Visualization** | joint angles **or** XYZ target + opening | embedded 3D plot of the arm, fingers (cyan), grip point (green wireframe octahedron), target (red `+`); an `Animate` button plays the smooth joint-space transition from the current pose |
+| **Visualization** | joint angles **or** XYZ target + opening | embedded 3D plot of the arm, fingers (cyan) and a thin dotted red connector to the target; an `Animate` button eases the joints and the grip opening from the current pose |
 
 Notes:
 
@@ -372,7 +375,8 @@ Notes:
   CLI plots — with the matplotlib toolbar for rotating/zooming in 3D.
 - The **`Animate`** button plays an eased, joint-space transition from the
   last drawn pose (the next run continues from where the previous one ended);
-  it becomes `Stop` while running, so you can cancel mid-motion.
+  the gripper opening eases from its current value to the target alongside the
+  joints. It becomes `Stop` while running, so you can cancel mid-motion.
 - On Linux you may need `python3-tk` installed (see the requirements
   section); otherwise the GUI reports a friendly error and the CLI remains
   fully usable.
@@ -385,7 +389,9 @@ Notes:
 a *smooth animation* in joint space from the **last pose you drew** to that
 target pose. Interpolation uses an ease-in/out curve (accelerate, cruise,
 decelerate) and, for `theta_base`, the shortest angular path — so
-`170° → -170°` sweeps through `180°`, not through `0°`.
+`170° → -170°` sweeps through `180°`, not through `0°`. The gripper opening
+rides the same curve, so the fingers open/close *during* the move instead of
+snapping to the target opening on the first frame.
 
 ```
 Select option: 7
@@ -396,18 +402,18 @@ Select option: 7
   gripper opening 0..1 (default 1, Enter = default): 1
   animation frames (default 30, Enter = default):
 
-  Animating joint-space transition:
-    start  base=  45.000  joint1=  30.000  joint2= -20.000 deg   <- last drawn pose
-    target base=  21.801  joint1=  77.133  joint2= -96.528 deg
+  Animating transition:
+    start  base=  45.000  joint1=  30.000  joint2= -20.000  joint3= -60.000 deg  opening=1.000
+    target base=  21.801  joint1=  77.133  joint2= -96.528  joint3= -60.000 deg  opening=1.000
 ```
 
 A matplotlib window opens and the arm eases from the start pose to the
-target (whose red `+` marker stays visible, so you see the hand land on it).
+target (whose thin dotted red connector stays visible, so you see the hand land on it).
 When it closes, the target pose becomes the new "last drawn" pose — run
 option `7` again to chain another transition from where the arm just ended.
-If the target pose is *identical* to the last drawn pose (e.g. you re-enter
-the same target you just drew), option `7` says so instead of opening an
-empty animation.
+If the target pose and opening are *both* identical to the last drawn pose
+(e.g. you re-enter the same target you just drew), option `7` says so instead
+of opening an empty animation.
 
 ---
 
@@ -814,10 +820,9 @@ formulas/artists). The drawing includes:
 - base, joint-1, joint-2, and wrist markers,
 - the robot links (drawn from the FK joint positions, identical formulas),
 - **the `GRIPPER_FINGERS` finger segments** from the wrist (cyan) up to each
-  fingertip, plus the grip point (a small green wireframe octahedron, == the FK
-  result),
+  fingertip,
 - global X (red) / Y (green) / Z (blue) axes,
-- an optional red `+` target marker when an IK target is supplied.
+- an optional thin dotted red connector from the wrist to the IK target when one is supplied.
 
 Two entry points in the CLI:
 
@@ -833,15 +838,20 @@ Visualization tab, whose toolbar lets you rotate/zoom the 3D view.
 - `interpolate_joints(from, to, frames=60)` — pure Python, returns the eased
   joint-space poses (`from` == first, `to` == last, `theta_base` via the
   shortest angular path). Reusable anywhere (a controller, the GUI, tests).
-- `plot_animation(from, to, ...)` (CLI option `7`) — a matplotlib
-  `FuncAnimation` that steps `draw_robot` through those poses in its own
-  window, keeping the optional red `+` target visible so the hand is seen
-  landing on it.
+- `interpolate_opening(from_opening, to_opening, frames=60)` — the grip
+  opening on the *same* ease curve, one value per frame, so the fingers move
+  in step with the joints. Pass the same `frames` as `interpolate_joints`.
+- `plot_animation(from, to, ..., from_opening=None)` (CLI option `7`) — a
+  matplotlib `FuncAnimation` that steps `draw_robot` through those poses in
+  its own window, keeping the optional dotted red line to the target visible so the hand is
+  seen landing on it. Pass `from_opening` to ramp the grip instead of holding it.
 - The GUI's **`Animate`** button drives the same interpolation with a tkinter
   timer (`root.after`), so both faces render identical motion.
 - Both animations pre-compute `animation_limits(...)` over the whole
   trajectory and pin the 3D axes to that one frame, so the view stays
-  rock-steady while the arm moves (the axes never zoom/pan per frame).
+  rock-steady while the arm moves (the axes never zoom/pan per frame). The
+  limits also accept a per-frame opening sequence, so an opening trajectory is
+  enclosed too.
 
 ---
 
@@ -920,10 +930,15 @@ Base ──(L0=50 mm fixed)── joint1 ──(L1=300 mm)── joint2 ──(L
   `spread = GRIPPER_OPENING × 30°` only **swings** the whole rigid finger about its base:
   `0` (closed) → the tips meet ON the axis, `1` (open) → they fan out to 30°. There is
   no joint along a finger and the curvature never changes.
+- **Palm**: a visual flange (spokes + base-ring outline) bridges the wrist tip
+  (`gripper_mount`, on the axis) to each finger base on that `R_base` ring, so the claw
+  reads as attached to the arm. It is drawn only — it adds no joint and no kinematics.
 
 **So the arm has exactly 4 degrees of freedom**: 4 angles (base, joint1, joint2, joint3) fully determine
 every point (joint1, joint2, joint3, gripper mount, fingertips, object centre). The fingers
-have no motors — their open/close is a *tool setting*, not a degree of freedom.
+have no motors and never change the reach — their open/close is a *tool setting*, not a
+degree of freedom — but it is still animated: during a transition the opening eases
+alongside the joints (see §4.4 and `interpolate_opening`).
 
 ### 12.3 Units and conventions (memorize these)
 
@@ -1100,8 +1115,9 @@ where noted, an optional `opening`):
 | `draw_robot` | `(ax, angles, target=None, opening=None, fixed_limits=None)` | draws into a 3D `Axes` |
 | `plot_robot` | `(angles, target=None, opening=None)` | opens its own window |
 | `interpolate_joints` | `(from_angles, to_angles, frames=60)` | eased joint-space poses (tuple) |
-| `animation_limits` | `(poses, opening=None, target=None)` | one equal-aspect box enclosing the whole trajectory |
-| `plot_animation` | `(from_angles, to_angles, target=None, opening=None, frames=60, interval=30)` | animates in its own window (axes stay fixed) |
+| `interpolate_opening` | `(from_opening, to_opening, frames=60)` | eased grip openings, one per frame (tuple) |
+| `animation_limits` | `(poses, opening=None, target=None)` | one equal-aspect box; `opening` may be a scalar or one value per pose |
+| `plot_animation` | `(from_angles, to_angles, target=None, opening=None, frames=60, interval=30, from_opening=None)` | animates in its own window; ramps the grip when `from_opening` is given |
 | `cli` / `main` | — | the text menu |
 
 **`RobotArm` facade** — a convenience class bound to one config. **Its kinematic methods
@@ -1185,13 +1201,15 @@ equal, giving a small but non-zero inner bound at the default `joint3`. They bec
 - **Where does an animation start from?** From the last pose that was drawn.
   In the CLI that is whatever option `1`/`4`/`5` or the previous animation
   ended at (initially `HOME_ANGLES = (0, 90, 0)`); in the GUI it is the
-  current picture on the Visualization tab.
+  current picture on the Visualization tab. The grip opening is treated the
+  same way: a transition eases from the last drawn opening to the target one.
 
 ### 12.15 Glossary
 
 - **DOF** — degree of freedom; an independently controllable joint (here: 4 - `theta_base`, `joint1`, `joint2`,
 `joint3`). The gripper opening is *not* a DOF; it is a tool parameter that only
-swings the rigid fingers and does **not** change the reach.
+swings the rigid fingers and does **not** change the reach — though its motion is
+still eased during an animation.
 - **FK / IK** — forward / inverse kinematics.
 - **Grip point** — on-axis grasp centre (the constant point IK aims at); the end-effector.
 - **Effective forearm `m_g`** — the single vector that `L2 + (L3+l_g)` at the

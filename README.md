@@ -41,12 +41,13 @@ Read this section before assuming any of the above works on hardware.
 | Tkinter GUIs | Working |
 | Fine-tuned model | Working, 99.9% end-to-end — **shipped weights predate the current dataset** |
 | **Hardware / servos** | **Not implemented. There is no serial, no GPIO, no firmware.** |
-| **"Fin-ray" gripper** | **Kinematic only.** Three rigid straight fingers. No tendons, no underactuation, no compliant elements. |
+| **"Fin-ray" gripper** | **Kinematic only.** Three rigid *curled* fingers (a circular arc of fixed curvature — no joint along a finger). No tendons, no underactuation, no compliant elements. The opening swings the whole finger and is animated, but never changes the reach. |
 | Hand / gesture recognition | Not implemented. `features_macro/hand_recognition.py` is a 0-byte placeholder. |
 
 The repository name says "fin-ray" because that is the intended end state. What exists
-today is a rigid three-finger cone gripper. `movements/robot_arm.py` states this in its
-own module docstring, and nothing in the code contradicts it.
+today is a rigid three-finger gripper whose fingers are curled talons (see the grip
+geometry in `movements/robot_arm.py` and `movements/README.md`), not a compliant fin-ray
+or a straight-finger cone. Nothing in the code contradicts that.
 
 Nothing in this repository talks to a physical robot. The output of a command is a JSON
 file naming the action, the direction, and five absolute joint angles. What you do with
