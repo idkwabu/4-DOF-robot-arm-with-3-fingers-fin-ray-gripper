@@ -10,7 +10,7 @@ This merges three previously separate programs:
 Everything now shares ONE angle contract, the one the trained model was fitted
 against and that ``robot_state.json`` already stores:
 
-    base     0 .. 180   yaw about +Z, 0 = +X, 90 = +Y, 180 = -X
+    base  -180 .. 180   yaw about +Z, 0 = +X, 90 = +Y, ±180 = -X
     joint1   0 .. 180   link L1 in the radial-Z plane, from horizontal outward
     joint2 -150 .. 150   link L2 RELATIVE to L1
     joint3 -150 .. 150   link L3 RELATIVE to L2
@@ -50,6 +50,8 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any, Iterable, Optional
 
+from robot_contract import JOINT_LIMITS
+
 BASE_DIR = Path(__file__).resolve().parent
 MIND_DIR = BASE_DIR / "mind"
 MODEL_PATH = MIND_DIR / "dum-e-qwen3-merged"
@@ -57,6 +59,7 @@ MODEL_PATH = MIND_DIR / "dum-e-qwen3-merged"
 # hardware is watching, both brains write the same command and the same pose.
 COMMAND_FILE = MIND_DIR / "robot_command.json"
 STATE_FILE = MIND_DIR / "robot_state.json"
+ROOT_STATE_FILE = BASE_DIR / "robot_state.json"
 PROMPT_FILE = MIND_DIR / "system_prompt.txt"
 
 # =====================================================================
@@ -65,13 +68,7 @@ PROMPT_FILE = MIND_DIR / "system_prompt.txt"
 
 DEFAULT_STATE = {"base": 90, "joint1": 90, "joint2": -60, "joint3": -60, "gripper": 50}
 ALL_JOINTS = tuple(DEFAULT_STATE)
-JOINT_RANGES = {
-    "base": (0, 180),
-    "joint1": (0, 180),
-    "joint2": (-150, 150),
-    "joint3": (-150, 150),
-    "gripper": (0, 100),
-}
+JOINT_RANGES = {**JOINT_LIMITS, "gripper": (0, 100)}
 VERTICAL_JOINTS = ("joint1", "joint2", "joint3")
 # JointAngles field name -> the key it has in JOINT_RANGES.  Only the base yaw
 # is spelled differently, because the dataclass inherited the old name.
@@ -155,11 +152,12 @@ VIZ_ANIM_FRAMES = 30
 VIZ_ANIM_INTERVAL_MS = 30
 # How often the Command tab drains finished model requests off the worker thread.
 POLL_INTERVAL_MS = 60
+MODEL_REQUEST_QUEUE_SIZE = 1
 
 HELP_TEXT = (
     "I understand: turn left/right, tilt up/down, move up-left/up-right/"
-    "down-left/down-right, open or close the gripper, set a joint to a number, "
-    "go home, stop, status.\n\n"
+    "down-left/down-right/up-middle/down-middle, open or close the gripper, "
+    "set a joint to a number, go home, stop, status.\n\n"
     "A plain turn swings 45 degrees off the middle. Add 'all the way', "
     "'as far as you can', 'fully', 'completely', 'hard' or 'max' for the full "
     "90: 'turn all the way left' swings to the stop, 'turn left' does not.\n\n"
@@ -680,6 +678,12 @@ def _write_json(path: Path, data: dict) -> None:
     temp.replace(path)
 
 
+def _write_state_files(state: dict) -> None:
+    """Keep the shared mind state and root-level GUI state mirror in sync."""
+    _write_json(STATE_FILE, state)
+    _write_json(ROOT_STATE_FILE, state)
+
+
 def load_state() -> dict:
     """The last pose Dum-E remembers, per joint.  Anything unusable falls back
     to the default for that joint alone, so one bad value never erases the
@@ -704,7 +708,7 @@ def ensure_state_file() -> dict:
     null or out of range is replaced by its default; every angle that is still
     usable is kept, so this never throws away what the arm has been doing."""
     state = load_state()
-    _write_json(STATE_FILE, state)
+    _write_state_files(state)
     return state
 
 
@@ -713,7 +717,7 @@ def save_state(command: dict) -> None:
     the remembered one, so the pose on disk only ever moves to a value the arm
     can actually hold."""
     if command["action"] == "home":
-        _write_json(STATE_FILE, DEFAULT_STATE.copy())
+        _write_state_files(DEFAULT_STATE.copy())
         return
     if command["action"] not in MOVE_ACTIONS:
         return
@@ -722,7 +726,18 @@ def save_state(command: dict) -> None:
         value = command.get(joint)
         if _in_range(value, *JOINT_RANGES[joint]):
             state[joint] = value
-    _write_json(STATE_FILE, state)
+    _write_state_files(state)
+
+
+def save_pose_state(pose: dict) -> None:
+    """Persist a complete, validated pose produced by a GUI visualization mode."""
+    state = {}
+    for joint in ALL_JOINTS:
+        value = pose.get(joint)
+        if not _in_range(value, *JOINT_RANGES[joint]):
+            raise ValueError(f"Invalid {joint} angle {value!r}; refusing to save pose.")
+        state[joint] = _number(value)
+    _write_state_files(state)
 
 
 def absolute_command(command: dict) -> dict:
@@ -926,8 +941,12 @@ def _require_limits(angles: JointAngles, config: RobotConfig = CONFIG) -> None:
         )
 
 
-def gripper_spread(opening: float, config: RobotConfig = CONFIG) -> float:
+def gripper_spread(
+    opening: float | None, config: RobotConfig = CONFIG
+) -> float:
     """Radians a finger sits off the tool axis, in radians."""
+    if opening is None:
+        opening = config.gripper_opening
     if not 0.0 <= opening <= 1.0:
         raise ValueError("Gripper opening must be between 0 and 1.")
     return math.radians(config.finger_spread) * opening
@@ -1018,8 +1037,7 @@ def _place(radial: float, height: float, yaw: float) -> CartesianPoint:
 
 def _tool_reach(opening: float, config: RobotConfig) -> float:
     """Distance from the wrist joint to the grip point along the tool axis."""
-    # The grip depth is a constant, so `opening` is accepted for API stability
-    # but no longer reaches the kinematic chain.
+    gripper_spread(opening, config)
     return config.l3 + _grip_depth(config)
 
 
@@ -1073,34 +1091,6 @@ def gripper_pose(
         fingertips=tuple(tips),
         finger_paths=tuple(paths),
     )
-
-
-def _reach_bounds(opening: float = 1.0, config: RobotConfig = CONFIG) -> tuple[float, float]:
-    """Reach bounds for the grip point with the wrist free to take any angle."""
-    return _reach_bounds_with_joint3(0.0, opening, config)
-
-
-def _reach_bounds_with_joint3(
-    joint3: float, opening: float = 1.0, config: RobotConfig = CONFIG
-) -> tuple[float, float]:
-    """Reach bounds for the grip point measured from the joint1 pivot when the
-    wrist is held at ``joint3``.
-
-    L3 and the finger extension form one rigid piece that sits at ``joint3`` to
-    the forearm, so forearm and wrist add up as a single vector before the
-    triangle inequality with L1 is applied.
-
-    ``opening`` is accepted for API stability but no longer changes the result:
-    the grip depth is a constant (``_grip_depth``), so there is one envelope per
-    ``joint3`` rather than a family of them.
-    """
-    stem = config.l3 + _grip_depth(config)
-    phi = math.radians(joint3)
-    forearm = math.hypot(
-        config.l2 + stem * math.cos(phi), stem * math.sin(phi)
-    )
-
-    return abs(config.l1 - forearm), config.l1 + forearm
 
 
 def is_reachable(
@@ -1203,15 +1193,11 @@ def _ik_stem_world(
     this stays closed-form.  ``joint3`` is recovered as a consequence of the
     constraint, not taken as an input.
 
-    Mirrors the ``y < 0`` folded-back convention used by :func:`inverse_kinematics`
-    so targets behind the base stay reachable.
+    Uses the target's signed world-frame yaw directly; the base range covers
+    the full ``[-180, 180]`` azimuth.
     """
-    if y < 0.0:
-        yaw = math.degrees(math.atan2(-y, -x))
-        radial = -math.hypot(x, y)
-    else:
-        yaw = math.degrees(math.atan2(y, x))
-        radial = math.hypot(x, y)
+    yaw = math.degrees(math.atan2(y, x))
+    radial = math.hypot(x, y)
     height = z - config.l0
 
     stem = math.radians(stem_deg)
@@ -1241,8 +1227,7 @@ def _ik_stem_world(
     # is already the physical joint2.
     joint1, joint2 = _solve_plane(radial, height, config.l2, config, joint2_up)
     joint3 = stem - joint1 - joint2
-    # `yaw` is deliberately NOT wrapped: this module's base range is 0..180, and
-    # _wrap_deg(180) would return -180 and fall outside it.
+    # Preserve the positive 180-degree endpoint rather than wrapping it to -180.
     return JointAngles(
         yaw,
         _wrap_deg(math.degrees(joint1)),
@@ -1261,27 +1246,28 @@ def inverse_kinematics(
     ``joint3`` is a wrist angle in degrees RELATIVE to L2, or one of two strings:
     ``"auto"`` lets the solver pick one, preferring the natural rest angle;
     ``"down"`` instead pins the stem straight down in the world frame so the
-    gripper approaches vertically.  ``joint2_up`` picks the branch, and
-    the other branch is tried too whenever the preferred one cannot be reached.
+    gripper approaches vertically.     ``joint2_up`` selects the elbow branch for numeric wrist angles. With
+    ``joint3="auto"``, it is preferred first and the alternate branch is tried
+    only if no limit-valid pose exists on the preferred branch. The fixed-
+    orientation ``"down"`` mode also tries the alternate branch if necessary.
     Raises ``ValueError`` when no pose inside the joint limits exists.
     """
-    # A point behind the base axis is not out of reach: the links can fold back
-    # past the column, so it is reached with a negative radial distance and the
-    # yaw reflected into 0..180.  Either way the solver sees a plain radius.
-    if y < 0.0:
-        yaw = math.degrees(math.atan2(-y, -x))
-        radial = -math.hypot(x, y)
-    else:
-        yaw = math.degrees(math.atan2(y, x))
-        radial = math.hypot(x, y)
+    gripper_spread(opening, config)
+    for name, value in (("x", x), ("y", y), ("z", z)):
+        if not math.isfinite(value):
+            raise ValueError(f"Target coordinate {name} must be finite.")
+    # The full signed base range lets the base point directly toward the target,
+    # so the radial distance remains non-negative in every world quadrant.
+    yaw = math.degrees(math.atan2(y, x))
+    radial = math.hypot(x, y)
     height = z - config.l0
 
     if isinstance(joint3, str):
         mode = joint3.strip().lower()
         if mode == "down":
             # Absolute stem orientation: joint3 is solved, not chosen, so this
-            # bypasses the auto wrist search.  Both elbow branches are still
-            # tried, and joint limits still apply, exactly as below.
+            # bypasses the auto wrist search. Prefer the requested branch but
+            # retain the alternate-branch fallback for this constrained mode.
             last = ""
             for up in (joint2_up, not joint2_up):
                 try:
@@ -1305,18 +1291,23 @@ def inverse_kinematics(
         wrists = (math.radians(float(joint3)),)
 
     last = ""
-    for wrist in wrists:
-        for up in (joint2_up, not joint2_up):
+    branches = (
+        (joint2_up, not joint2_up)
+        if isinstance(joint3, str)
+        else (joint2_up,)
+    )
+    for branch in branches:
+        for wrist in wrists:
             try:
-                angles = _ik_once(radial, height, wrist, opening, config, up)
+                angles = _ik_once(
+                    radial, height, wrist, opening, config, branch
+                )
             except ValueError as exc:
                 last = str(exc)
                 continue
             angles = JointAngles(yaw, angles.joint1, angles.joint2, angles.joint3)
             if check_joint_limits(angles, config):
                 return angles
-        if not isinstance(joint3, str):
-            break
 
     raise ValueError(
         f"No arm pose reaches ({x:.1f}, {y:.1f}, {z:.1f}) mm within the joint limits."
@@ -1339,6 +1330,9 @@ def _wrist_candidates(step: float = 5.0) -> tuple[float, ...]:
 def verify_fk_ik(samples: int = 20, opening: float = 1.0,
                  config: RobotConfig = CONFIG) -> str:
     """Round-trip random poses: FK -> IK -> FK and report the worst error."""
+    if samples < 1:
+        raise ValueError("samples must be at least 1.")
+    gripper_spread(opening, config)
     rng = random.Random(7)
     worst = 0.0
     solved = 0
@@ -1350,14 +1344,25 @@ def verify_fk_ik(samples: int = 20, opening: float = 1.0,
             rng.uniform(*JOINT_RANGES["joint3"]),
         )
         goal = forward_kinematics(angles, opening, config)
+        _, delta = _forearm(
+            math.radians(angles.joint3), opening, config
+        )
+        joint2_up = math.radians(angles.joint2) + delta <= 0.0
         try:
-            back = inverse_kinematics(goal.x, goal.y, goal.z, opening=opening, config=config)
+            back = inverse_kinematics(
+                goal.x, goal.y, goal.z, joint2_up=joint2_up,
+                opening=opening, config=config,
+            )
         except ValueError:
             continue
         solved += 1
         again = forward_kinematics(back, opening, config)
         worst = max(worst, math.dist((goal.x, goal.y, goal.z), (again.x, again.y, again.z)))
-    verdict = "PASS" if worst <= POSITION_TOLERANCE_MM else "FAIL"
+    verdict = (
+        "PASS"
+        if solved == samples and worst <= POSITION_TOLERANCE_MM
+        else "FAIL"
+    )
     return (
         f"FK -> IK -> FK round trip over {samples} random poses\n"
         f"  solved            : {solved}/{samples}\n"
@@ -1624,6 +1629,9 @@ class DumEApp:
 
         self.state = ensure_state_file()
         self.results: queue.Queue[tuple[int, dict | None, str | None]] = queue.Queue()
+        self.model_requests: queue.Queue[tuple[int, str] | None] = queue.Queue(
+            maxsize=MODEL_REQUEST_QUEUE_SIZE
+        )
         self.request_token = 0
         self._closed = False
         self._poll_job: Optional[str] = None
@@ -1644,6 +1652,10 @@ class DumEApp:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self._draw(self._angles, opening=self._opening)
         self._poll_job = self.root.after(POLL_INTERVAL_MS, self._poll_results)
+        self._model_worker_thread = threading.Thread(
+            target=self._model_worker, name="dume-model-worker", daemon=True
+        )
+        self._model_worker_thread.start()
 
     # -- shared layout ------------------------------------------------
     def _angles_row(self, parent, prefix: str, base="45.0", j1="30.0",
@@ -1809,6 +1821,20 @@ class DumEApp:
             suffix = "%" if key == "gripper" else " deg"
             self.pose_labels[key].configure(text=f"{self.state[key]:g}{suffix}")
 
+    def _persist_visual_pose(self) -> None:
+        if self._angles is None:
+            return
+        pose = {
+            "base": self._angles.theta_base,
+            "joint1": self._angles.joint1,
+            "joint2": self._angles.joint2,
+            "joint3": self._angles.joint3,
+            "gripper": 100.0 * self._opening,
+        }
+        save_pose_state(pose)
+        self.state = pose
+        self._refresh_pose_labels()
+
     def submit_command(self) -> None:
         prompt = self.cmd_text.get("1.0", "end").strip()
         if not prompt:
@@ -1825,14 +1851,28 @@ class DumEApp:
             return
 
         self._log("parser was not sure - asking the model")
-        threading.Thread(target=self._request_model, args=(token, prompt),
-                         daemon=True).start()
+        self._queue_model_request(token, prompt)
 
-    def _request_model(self, token: int, prompt: str) -> None:
+    def _queue_model_request(self, token: int, prompt: str) -> None:
         try:
-            self.results.put((token, ask_model(prompt), None))
-        except Exception as exc:  # surfaced in the UI, never crashes the window
-            self.results.put((token, None, str(exc)))
+            self.model_requests.put_nowait((token, prompt))
+        except queue.Full:
+            try:
+                self.model_requests.get_nowait()
+            except queue.Empty:
+                pass
+            self.model_requests.put_nowait((token, prompt))
+
+    def _model_worker(self) -> None:
+        while True:
+            request = self.model_requests.get()
+            if request is None:
+                return
+            token, prompt = request
+            try:
+                self.results.put((token, ask_model(prompt), None))
+            except Exception as exc:  # surfaced in the UI, never crashes the window
+                self.results.put((token, None, str(exc)))
 
     def _poll_results(self) -> None:
         try:
@@ -1934,6 +1974,7 @@ class DumEApp:
             messagebox.showerror("DUM-E", str(exc))
             return
         self._draw(angles, opening=opening, target=target)
+        self._persist_visual_pose()
 
     def _viz_clear(self) -> None:
         self.viz_ax.clear()
@@ -1963,6 +2004,7 @@ class DumEApp:
         target_opening = self.cfg.gripper_opening if opening is None else opening
         if _same_pose(start, goal) and abs(target_opening - start_opening) <= 1e-6:
             self._draw(goal, opening, target)
+            self._persist_visual_pose()
             messagebox.showinfo(
                 "DUM-E",
                 "Start and target poses are identical, so there is nothing to\n"
@@ -2011,6 +2053,7 @@ class DumEApp:
         self._anim_job = None
         self.viz_anim_btn.configure(text="Animate")
         self.viz_plot_btn.configure(state="normal")
+        self._persist_visual_pose()
 
     def _goto_viz_angles(self, angles: JointAngles, opening=None, target=None,
                          animate: bool = False, from_opening=None) -> None:
@@ -2054,6 +2097,12 @@ class DumEApp:
                 except tk.TclError:
                     pass
         self._poll_job = self._anim_job = None
+        while True:
+            try:
+                self.model_requests.get_nowait()
+            except queue.Empty:
+                break
+        self.model_requests.put_nowait(None)
         self.root.destroy()
 
 

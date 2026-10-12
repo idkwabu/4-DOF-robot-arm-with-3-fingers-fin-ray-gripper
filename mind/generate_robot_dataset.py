@@ -30,6 +30,7 @@ SYSTEM = (BASE_DIR / "system_prompt.txt").read_text(encoding="utf-8").strip()
 TRAIN_FILE = BASE_DIR / "robot_dataset.jsonl"
 EVAL_FILE = BASE_DIR / "robot_dataset_eval.jsonl"
 ROWS_PER_CLASS = 570
+VALIDATION_ROWS_PER_INTENT = 32
 EVAL_FRACTION = 0.1
 SEED = 20260926
 
@@ -251,6 +252,18 @@ def split_families(families: list[list[tuple[str, dict]]], rng: random.Random):
     return ordered[holdout:], ordered[:holdout]
 
 
+def split_validation_families(
+    families: list[list[tuple[str, dict]]], rng: random.Random
+):
+    """Split validation families from training without touching the final holdout."""
+    ordered = list(families)
+    rng.shuffle(ordered)
+    validation_count = max(1, round(len(ordered) * EVAL_FRACTION))
+    if validation_count >= len(ordered):
+        raise ValueError("Not enough seed families to create separate train and validation splits.")
+    return ordered[validation_count:], ordered[:validation_count]
+
+
 def write(path: Path, rows: list[tuple[str, dict]]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for prompt, command in rows:
@@ -266,7 +279,9 @@ def write(path: Path, rows: list[tuple[str, dict]]) -> None:
 
 def main() -> int:
     rng = random.Random(SEED)
-    train_rows: list[tuple[str, dict]] = []
+    validation_rng = random.Random(SEED + 1)
+    training_candidate_rows: list[tuple[str, dict]] = []
+    validation_rows: list[tuple[str, dict]] = []
     eval_rows: list[tuple[str, dict]] = []
 
     groups: dict[tuple[str, str], list[str]] = defaultdict(list)
@@ -281,40 +296,76 @@ def main() -> int:
             family = [(prompt, command) for prompt in build_rows(action, direction, seed_text)]
             validate(family)
             families.append(family)
-        train_families, eval_families = split_families(families, rng)
-        for family in train_families:
-            train_rows.extend(family)
+        remaining_families, eval_families = split_families(families, rng)
+        train_families, validation_families = split_validation_families(
+            remaining_families, validation_rng
+        )
+        for family in remaining_families:
+            training_candidate_rows.extend(family)
+        for family in validation_families:
+            validation_rows.extend(family)
         for family in eval_families:
             eval_rows.extend(family)
         print(
             f"{action:6} {direction:10} {len(seeds_for(groups, action, direction)):2} seeds"
-            f" -> {len(train_families):2} train, {len(eval_families):2} holdout"
+            f" -> {len(train_families):2} train, {len(validation_families):2} validation,"
+            f" {len(eval_families):2} final holdout"
         )
 
-    rng.shuffle(train_rows)
+    rng.shuffle(training_candidate_rows)
     rng.shuffle(eval_rows)
+    validation_rng.shuffle(validation_rows)
 
     per_class = defaultdict(int)
     balanced_train = []
-    for prompt, command in train_rows:
+    validation_family_prompts = {prompt for prompt, _ in validation_rows}
+    for prompt, command in training_candidate_rows:
+        if prompt in validation_family_prompts:
+            continue
         if per_class[command["action"]] >= ROWS_PER_CLASS:
             continue
         per_class[command["action"]] += 1
         balanced_train.append((prompt, command))
 
+    validation_per_intent = defaultdict(int)
+    balanced_validation = []
+    for prompt, command in validation_rows:
+        intent = (command["action"], command["direction"])
+        if validation_per_intent[intent] >= VALIDATION_ROWS_PER_INTENT:
+            continue
+        validation_per_intent[intent] += 1
+        balanced_validation.append((prompt, command))
+
     write(TRAIN_FILE, balanced_train)
+    validation_file = BASE_DIR / "robot_dataset_validation.jsonl"
+    write(validation_file, balanced_validation)
     write(EVAL_FILE, eval_rows)
 
-    prompts = {prompt for prompt, _ in balanced_train} & {prompt for prompt, _ in eval_rows}
+    train_prompts = {prompt for prompt, _ in balanced_train}
+    validation_prompts = {prompt for prompt, _ in balanced_validation}
+    eval_prompts = {prompt for prompt, _ in eval_rows}
+    train_intents = {(command["action"], command["direction"]) for _, command in balanced_train}
+    validation_intents = {
+        (command["action"], command["direction"]) for _, command in balanced_validation
+    }
+    eval_intents = {(command["action"], command["direction"]) for _, command in eval_rows}
     directions = {(c["action"], c["direction"]) for _, c in balanced_train}
     print(f"\nwrote {len(balanced_train)} train rows to {TRAIN_FILE.name}")
-    print(f"wrote {len(eval_rows)} holdout rows to {EVAL_FILE.name}")
-    print(f"train prompts shared with holdout: {len(prompts)}")
+    print(f"wrote {len(balanced_validation)} balanced validation rows to {validation_file.name}")
+    print(f"wrote {len(eval_rows)} final holdout rows to {EVAL_FILE.name}")
+    print(f"shared train/validation prompts: {len(train_prompts & validation_prompts)}")
+    print(f"shared train/final-holdout prompts: {len(train_prompts & eval_prompts)}")
+    print(f"shared validation/final-holdout prompts: {len(validation_prompts & eval_prompts)}")
     print(f"distinct action/direction pairs in train: {len(directions)}")
     print("per class:", dict(sorted(per_class.items())))
+    print("validation per intent:", dict(sorted(validation_per_intent.items())))
 
-    assert not prompts, "holdout leaked into training"
+    assert not train_prompts & validation_prompts, "validation leaked into training"
+    assert not train_prompts & eval_prompts, "final holdout leaked into training"
+    assert not validation_prompts & eval_prompts, "final holdout leaked into validation"
+    assert train_intents == validation_intents == eval_intents, "intent labels differ between splits"
     assert len(balanced_train) >= 3000, "training set is too small"
+    assert len(balanced_validation) >= 300, "validation set is too small"
     assert len(eval_rows) >= 300, "holdout is too small to measure anything"
     return 0
 

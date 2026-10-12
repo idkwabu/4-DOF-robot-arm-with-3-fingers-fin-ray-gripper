@@ -6,9 +6,8 @@ gripper mount → Fingers`). The model is a fixed vertical `L0 = 50 mm` base
 link, a `300 mm` L1 upper link, a `250 mm` L2 forearm, and a `70 mm` L3 wrist
 stem. **The four DOF are `theta_base`, `joint1`, `joint2` and `joint3`** — `joint3`
 is the wrist and is a real, commandable joint (`±150°`, default `-60°`), *not* a
-fixed kink. The `WRIST_STEM_ANGLE = -60°` config field is a legacy constant that
-survives only in the dead `_reach_bounds` helper and the `_grip_parameters`
-reporting path; the live kinematics all use the `joint3` you pass in. L0 cannot
+fixed kink. The `WRIST_STEM_ANGLE = -60°` config field is a legacy value used by
+`_grip_parameters` for reporting; live FK/IK use the `joint3` you pass in. L0 cannot
 tilt; the base rotates about world `+Z`; joint1 and joint2 control radial-Z tilt
 and have no independent spin. At the gripper mount sits a simulated **3-finger
 gripper** (`GRIPPER_FINGERS = 3`): three rigid **curled talons** — each a
@@ -68,9 +67,10 @@ vision, speech, LLM/AI, web, databases, motion planning.
 pip install numpy matplotlib
 ```
 
-Everything lives in two files:
+The kinematics interface uses these files:
 - `robot_arm.py` — the kinematics core (import it as a library, run it as a CLI).
 - `robot_arm_gui.py` — the tkinter desktop UI (imports `robot_arm`).
+- `../robot_contract.py` — shared joint limits for the robot interfaces.
 
 ---
 
@@ -157,26 +157,29 @@ ra.plot_animation(ra.JointAngles(30.0, 45.0, -40.0, -60.0),
 ra.verify_fk_ik(n_samples=50)
 ```
 
-### Known bug: the `RobotArm` facade drops `joint3`
+### Class-based usage
 
-`RobotArm` wraps a config so you need not pass `config=` everywhere, but its kinematic
-methods were **not updated when `joint3` was added** to the 4-DOF arm. As shipped,
-**5 of its 7 public methods raise `TypeError`**:
+`RobotArm` binds a `RobotConfig` and exposes the same four-joint operations without
+requiring `config` on every call. `joint3` is required for FK, gripper geometry, and
+joint-limit checks; reachability and IK default to `joint3=-60°`.
 
-| Method | Status |
-| --- | --- |
-| `RobotArm.forward_kinematics(theta_base, joint1, joint2, opening=None)` | **broken** — no `joint3`; the 4th positional is captured as `config` |
-| `RobotArm.gripper_pose(...)` | **broken** — same cause |
-| `RobotArm.check_joint_limits(...)` | **broken** — takes 4 positional args, so a `joint3` argument is rejected |
-| `RobotArm.is_reachable(...)` | **broken** — forwards `joint3=None` into the geometry |
-| `RobotArm.inverse_kinematics(...)` | works |
-| `RobotArm.plot(...)` | works |
-| `RobotArm.verify(...)` | works |
+```python
+import robot_arm as ra
 
-**Use the module-level functions in §12 above** — they take a `config` keyword and are
-correct. `RobotArm.inverse_kinematics`, `.plot` and `.verify` are safe if you have a
-`RobotArm` instance for other reasons. This is a source defect, not a documentation
-choice; see [issue 1](../README.md#1-the-robotarm-facade-is-missing-joint3-and-passes-the-wrong-arity) in the root README.
+arm = ra.RobotArm()
+grip = arm.forward_kinematics(30.0, 45.0, -40.0, -60.0)
+pose = arm.gripper_pose(30.0, 45.0, -40.0, -60.0, opening=0.5)
+angles = arm.inverse_kinematics(grip.x, grip.y, grip.z, joint3="auto")
+reachable = arm.is_reachable(grip.x, grip.y, grip.z, joint3=-60.0)
+within_limits = arm.check_joint_limits(
+    angles.theta_base, angles.joint1, angles.joint2, angles.joint3
+)
+```
+
+The facade's `is_reachable` method accepts `joint3` in degrees, like the other
+class-based joint-angle methods. For `joint3="auto"`, `joint2_up` is preferred first;
+if that branch has no limit-valid solution for any wrist candidate, the solver tries the
+alternate elbow branch.
 
 ---
 
@@ -280,10 +283,6 @@ Create a file `demo.py` alongside `robot_arm.py`:
 ```python
 """Minimal DUM-E demo: FK, IK, workspace, limits, then a 3D plot."""
 import robot_arm as ra
-
-# Module-level functions are used throughout: the RobotArm facade's kinematic
-# methods still drop joint3 and raise TypeError (see the facade note in section 3).
-
 
 def main() -> None:
     # 1) Forward kinematics: angles (deg) -> grip point (mm)
@@ -737,9 +736,8 @@ document quote. That older number came from a half-length gripper model
 `is_reachable` takes `joint3` as an explicit argument (default `-60°`) and shares its
 bounds with the IK via `_reach_bounds_with_joint3`, so the two checks agree by
 construction. Its `opening` argument is kept for API stability but no longer changes
-the bounds. A private `_reach_bounds` helper that pins the wrist angle to the
-`WRIST_STEM_ANGLE` constant also exists but is **dead code** — it is correct only when
-`joint3` happens to equal that constant.
+the bounds. An obsolete helper that pinned the wrist to `WRIST_STEM_ANGLE` was removed;
+the reach calculation now has one live, `joint3`-aware path.
 
 > **Near-full reach, both ways:** at `joint3 ≈ ±74.3°` the effective forearm satisfies
 > `m_g = L1 = 300 mm` exactly, so the inner bound `|L1 − m_g|` collapses to **0.00 mm**
@@ -765,8 +763,8 @@ FINGER_CURL_DEG = 60.0    # deg  fixed inward curl of the rigid finger
 GRIP_DEPTH = 41.35        # mm  constant on-axis grasp depth (= R_arc·sin(curl))
 GRIPPER_OPENING = 1.0     # 0 = closed (tips meet on axis) .. 1 = open
 JOINT_LIMITS = {
-    "base":     (-180.0, 180.0),   # full revolution
-    "joint1":   (-90.0,  110.0),   # link-1 angle from horizontal outward
+    "base":     (-180.0, 180.0),   # full signed yaw range
+    "joint1":   (0.0, 180.0),      # link-1 angle from horizontal outward
     "joint2":   (-150.0, 150.0),   # relative link-2 angle
     "joint3":   (-150.0, 150.0),   # wrist angle relative to the forearm
 }
@@ -913,17 +911,16 @@ Base ──(L0=50 mm fixed)── joint1 ──(L1=300 mm)── joint2 ──(L
 ```
 
 - **Base**: the only joint attached to the world. Rotates the whole arm
-  around vertical **+Z**. Range ±180°. The fixed vertical link `L0 = 50 mm`
+  around vertical **+Z**. Range −180°..180°. The fixed vertical link `L0 = 50 mm`
   connects the base to `joint1` and cannot tilt.
 - **`joint1`** (shoulder / L1 tilt): lifts/lowers link 1 in a vertical plane.
   Measured from horizontal outward; `joint1 = 0` → arm horizontal, `90°` → straight up.
-  Range −90°..110°.
+  Range 0°..180°, shared with the command brain via `robot_contract.py`.
 - **`joint2`** (elbow / L2 tilt): bends link 2 *relative to* link 1. `0` → arm straight.
   Range ±150°.
-- **Stem `L3`**: a rigid 70 mm segment at a **fixed** `-60°` (the kink) off
-  link 2. It is *not* a 4th joint — rotating `joint2` sweeps the whole stem
-  around with the forearm. The stem runs from the **wrist mount** (end of L2)
-  to the **gripper mount** (end of L3).
+- **Stem `L3`**: a rigid 70 mm segment connected by the commandable `joint3`,
+  whose default/home angle is `-60°` relative to link 2. The stem runs from the
+  **wrist mount** (end of L2) to the **gripper mount** (end of L3).
 - **Fingers**: `GRIPPER_FINGERS = 3` rigid **curled talons**, each `FINGER_LENGTH = 50 mm`
   of arc length curling inward by `FINGER_CURL_DEG = 60°`, mounted on a ring of radius
   `R_base = 23.87 mm` around the tool axis and spaced 120° apart. The opening
@@ -1110,7 +1107,7 @@ where noted, an optional `opening`):
 | `inverse_kinematics` | `(x, y, z, joint2_up=True, config=DEFAULT_CONFIG, opening=None, joint3=-60.0)` | `JointAngles` (deg); `joint3` may be `"auto"` or `"down"` |
 | `is_reachable` | `(x, y, z, config=DEFAULT_CONFIG, joint3=-60.0, opening=None)` | `bool` (geometric) |
 | `check_joint_limits` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG)` | `bool` (physical) |
-| `requires_joint_limits` | `(theta_base, joint1, joint2)` | `JointAngles` or raises `ValueError` |
+| `requires_joint_limits` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG)` | `JointAngles` or raises `ValueError` |
 | `verify_fk_ik` | `(n_samples=20, opening=None)` | `(max_pos_err, passed, total)` |
 | `draw_robot` | `(ax, angles, target=None, opening=None, fixed_limits=None)` | draws into a 3D `Axes` |
 | `plot_robot` | `(angles, target=None, opening=None)` | opens its own window |
@@ -1147,13 +1144,13 @@ Configurable (one block at the top of `robot_arm.py`):
 | `L1` | 300 mm | upper arm |
 | `L2` | 250 mm | forearm |
 | `L3` | 70 mm | wrist stem |
-| `WRIST_STEM_ANGLE` | −60° | legacy default wrist angle; used only by `_grip_parameters` and the dead `_reach_bounds`. Use the `joint3` argument instead |
+| `WRIST_STEM_ANGLE` | −60° | legacy value used by `_grip_parameters` for reporting; use the `joint3` argument for live FK/IK |
 | `GRIPPER_FINGERS` | 3 | finger count (tripod) |
 | `FINGER_LENGTH` | 50 mm | finger ARC length (one rigid curled bar) |
 | `FINGER_OPENING_DEG` | 30° | max swing of a finger off the tool axis |
 | `FINGER_CURL_DEG` | 60° | fixed inward curl of the rigid finger |
 | `GRIPPER_OPENING` | 1.0 | default opening (0 closed .. 1 open) |
-| `JOINT_LIMITS` | base ±180°, j1 −90..110°, j2 ±150° | physical ranges |
+| `JOINT_LIMITS` | base ±180°, j1 0..180°, j2/j3 ±150° | shared ranges from `robot_contract.py` |
 | `POSITION_TOLERANCE_MM` | 0.1 | verification position bar |
 | `REACH_EPSILON_MM` / `MIN_D_SHARE_LIMIT` | 1e-9 | numerical slack/guards |
 

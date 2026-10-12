@@ -29,8 +29,13 @@ world origin. Joint limits are checked separately from geometric reachability.
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, Sequence, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from robot_contract import JOINT_LIMITS
 
 # =====================================================================
 # 2. ROBOT CONFIGURATION  (the single place robot dimensions live)
@@ -82,7 +87,7 @@ GRIP_DEPTH: float = FINGER_ARC_RADIUS * math.sin(math.radians(FINGER_CURL_DEG))
 # independent of the kinematics math, and may change when the physical
 # arm is built.  Ranges are inclusive on both ends.
 #
-#   base:     (-180, 180)    full revolution, per the atan2 convention.
+#   base:     (-180, 180)    full servo yaw range.
 #   joint1:   (0, 180)       link-1 angle in the radial-Z plane, measured
 #                            from horizontal outward (0 = horizontal,
 #                            positive = rising above horizon).
@@ -99,13 +104,6 @@ GRIP_DEPTH: float = FINGER_ARC_RADIUS * math.sin(math.radians(FINGER_CURL_DEG))
 #                            is the default/home offset baked into the effective
 #                            forearm model.  The physical joint3 rotates L3 around
 #                            the same axis as joint2 (the radial-Z plane).
-JOINT_LIMITS: Dict[str, Tuple[float, float]] = {
-    "base": (-180.0, 180.0),
-    "joint1": (-90.0, 110.0),
-    "joint2": (-150.0, 150.0),
-    "joint3": (-150.0, 150.0),
-}
-
 # Numerical tolerances.
 POSITION_TOLERANCE_MM: float = 0.1    # FK -> IK -> FK Cartesian tolerance
 ANGLE_TOLERANCE_RAD: float = 1e-6     # angle-reconstruction tolerance
@@ -234,16 +232,6 @@ def _check_finite(value: float, name: str) -> None:
         raise ValueError(f"Numerically invalid input: {name}={value!r} is not finite.")
 
 
-def _reach_bounds(config: RobotConfig, opening: float | None = None) -> Tuple[float, float]:
-    """Geometric reach bounds for the GRIP POINT (|L1 - m_g|, L1 + m_g).
-
-    Kept in one place so ``inverse_kinematics()`` and ``is_reachable()``
-    agree by construction.  ``m_g`` comes from ``_grip_parameters``.
-    """
-    m, _ = _grip_parameters(config, opening)
-    return abs(config.l1 - m), config.l1 + m
-
-
 def _forearm_parameters(config: RobotConfig, axis_len: float) -> Tuple[float, float]:
     """Effective forearm (m, delta) for a rigid tool-axis extension.
 
@@ -258,11 +246,6 @@ def _forearm_parameters(config: RobotConfig, axis_len: float) -> Tuple[float, fl
     m = math.hypot(real, imag)
     delta = math.atan2(imag, real)
     return m, delta
-
-
-def _stem_parameters(config: RobotConfig) -> Tuple[float, float]:
-    """Effective forearm (m, delta) for the fixed wrist-angle stem L3."""
-    return _forearm_parameters(config, config.l3)
 
 
 def _grip_parameters(config: RobotConfig, opening: float | None = None) -> Tuple[float, float]:
@@ -591,11 +574,10 @@ def _ik_rad(
     min_reach = abs(config.l1 - m)
     max_reach = config.l1 + m
 
-    # Step 1: base angle isolates the azimuth.
     theta_base = math.atan2(y, x)
+    r = math.hypot(x, y)
 
     # Step 2: collapse to the radial-Z 2-link problem from joint1.
-    r = math.hypot(x, y)
     height = z - config.l0
     d2 = r * r + height * height
     d = math.sqrt(d2)
@@ -693,7 +675,9 @@ def _ik_stem_world(
 
     # Peel the known stem vector off the target: the remaining point is what
     # links 1 and 2 alone would have to reach.
-    r = math.hypot(x, y) - tool * math.cos(stem)
+    theta_base = math.atan2(y, x)
+    r = math.hypot(x, y)
+    r -= tool * math.cos(stem)
     height = (z - config.l0) - tool * math.sin(stem)
 
     d2 = r * r + height * height
@@ -733,7 +717,6 @@ def _ik_stem_world(
     # joint3 is a consequence of the constraint, not an input.
     joint3 = stem - joint1 - joint2
 
-    theta_base = math.atan2(y, x)
     joint_angles = JointAngles(
         theta_base=_to_deg(_wrap_angle(theta_base)),
         joint1=_to_deg(_wrap_angle(joint1)),
@@ -774,7 +757,9 @@ def inverse_kinematics(
     strings:
 
     ``"auto"``
-        search for a joint3 that reaches the target within the joint limits.
+        search for a joint3 that reaches the target within the joint limits,
+    preferring the elbow branch selected by ``joint2_up`` and then trying
+    the alternate branch if necessary.
     ``"down"``
         instead solve for joint3 so the stem points straight DOWN in the world
         frame, i.e. ``joint1 + joint2 + joint3 == -90``.  This constrains the
@@ -816,12 +801,13 @@ def _inverse_kinematics_auto_joint3(
     config: RobotConfig,
     opening: float | None,
 ) -> JointAngles:
-    """Search for a joint3 value that makes the target reachable with all joints within limits.
+    """Search for a joint3 value on the requested elbow branch that makes the
+    target reachable with all joints within limits.
     
     Strategy:
     1. Try default joint3 (-60°) first
     2. Search through joint3 range in steps, preferring values closer to -60° (default)
-    3. Return first valid solution found (tries both joint2_up and joint2_down for each joint3)
+    3. Return the first valid solution on the requested ``joint2_up`` branch
     """
     # Define search range for joint3
     j3_min, j3_max = config.joint_limits.get("joint3", (-150.0, 150.0))
@@ -842,37 +828,28 @@ def _inverse_kinematics_auto_joint3(
             seen.add(c)
             unique_candidates.append(c)
     
-    last_error = None
-    for j3 in unique_candidates:
-        try:
-            # Check geometric reachability first (fast check)
+    for branch in (joint2_up, not joint2_up):
+        for j3 in unique_candidates:
+            # Check geometric reachability first (fast check).
             if not is_reachable(x, y, z, config, math.radians(j3), opening):
                 continue
-            
-            # Try joint2_up
-            angles_rad = _ik_rad(x, y, z, True, config, math.radians(j3), opening)
+            try:
+                angles_rad = _ik_rad(
+                    x, y, z, branch, config, math.radians(j3), opening
+                )
+            except ValueError:
+                continue
             candidate = JointAngles(
                 theta_base=_to_deg(angles_rad.theta_base),
                 joint1=_to_deg(angles_rad.joint1),
                 joint2=_to_deg(angles_rad.joint2),
                 joint3=j3,
             )
-            if check_joint_limits(candidate.theta_base, candidate.joint1, candidate.joint2, candidate.joint3, config):
+            if check_joint_limits(
+                candidate.theta_base, candidate.joint1, candidate.joint2,
+                candidate.joint3, config
+            ):
                 return candidate
-                
-            # Try joint2_down
-            angles_rad = _ik_rad(x, y, z, False, config, math.radians(j3), opening)
-            candidate = JointAngles(
-                theta_base=_to_deg(angles_rad.theta_base),
-                joint1=_to_deg(angles_rad.joint1),
-                joint2=_to_deg(angles_rad.joint2),
-                joint3=j3,
-            )
-            if check_joint_limits(candidate.theta_base, candidate.joint1, candidate.joint2, candidate.joint3, config):
-                return candidate
-                
-        except ValueError as e:
-            continue
     
     # If we got here, no valid joint3 found
     raise ValueError(f"No valid joint3 found in range [{j3_min:.1f}, {j3_max:.1f}] for target ({x:.1f}, {y:.1f}, {z:.1f})")
@@ -919,6 +896,8 @@ def check_joint_limits(
         "joint3": joint3,
     }
     for joint, value in angles.items():
+        if not math.isfinite(value):
+            return False
         lo, hi = config.joint_limits[joint]
         if value < lo or value > hi:
             return False
@@ -1046,10 +1025,6 @@ def verify_fk_ik(
 # =====================================================================
 # 10. 3D VISUALIZATION (matplotlib)
 # =====================================================================
-
-
-def _draw_grip_octahedron(ax, center, axis, size, color="tab:green", label="grip point") -> None:
-    ax.scatter(center.x, center.y, center.z, color="tab:red", s=25)
 
 
 def _set_equal_aspect(ax, points) -> None:
@@ -1402,20 +1377,45 @@ class RobotArm:
     l3 = property(lambda s: s.config.l3)
     stem_angle = property(lambda s: s.config.wrist_stem_angle)
 
-    def forward_kinematics(self, theta_base, joint1, joint2, opening=None) -> CartesianPoint:
-        return forward_kinematics(theta_base, joint1, joint2, self.config, opening)
+    def forward_kinematics(
+        self, theta_base: float, joint1: float, joint2: float, joint3: float,
+        opening: float | None = None,
+    ) -> CartesianPoint:
+        return forward_kinematics(
+            theta_base, joint1, joint2, joint3, self.config, opening
+        )
 
-    def inverse_kinematics(self, x, y, z, joint2_up: bool = True, opening=None) -> JointAngles:
-        return inverse_kinematics(x, y, z, joint2_up=joint2_up, config=self.config, opening=opening)
+    def inverse_kinematics(
+        self, x: float, y: float, z: float, joint2_up: bool = True,
+        opening: float | None = None, joint3: float | str = -60.0,
+    ) -> JointAngles:
+        return inverse_kinematics(
+            x, y, z, joint2_up=joint2_up, config=self.config,
+            opening=opening, joint3=joint3,
+        )
 
-    def is_reachable(self, x, y, z, opening=None) -> bool:
-        return is_reachable(x, y, z, self.config, opening)
+    def is_reachable(
+        self, x: float, y: float, z: float, joint3: float = -60.0,
+        opening: float | None = None,
+    ) -> bool:
+        return is_reachable(
+            x, y, z, self.config, math.radians(joint3), opening
+        )
 
-    def check_joint_limits(self, theta_base, joint1, joint2) -> bool:
-        return check_joint_limits(theta_base, joint1, joint2, self.config)
+    def check_joint_limits(
+        self, theta_base: float, joint1: float, joint2: float, joint3: float,
+    ) -> bool:
+        return check_joint_limits(
+            theta_base, joint1, joint2, joint3, self.config
+        )
 
-    def gripper_pose(self, theta_base, joint1, joint2, opening=None) -> FingerGripper:
-        return gripper_pose(theta_base, joint1, joint2, self.config, opening)
+    def gripper_pose(
+        self, theta_base: float, joint1: float, joint2: float, joint3: float,
+        opening: float | None = None,
+    ) -> FingerGripper:
+        return gripper_pose(
+            theta_base, joint1, joint2, joint3, self.config, opening
+        )
 
     def plot(self, angles: JointAngles, target: CartesianPoint | None = None, opening=None) -> None:
         plot_robot(angles, self.config, target, opening)

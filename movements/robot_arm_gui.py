@@ -565,6 +565,7 @@ class RobotArmApp:
         self.v_base.var.set(f"{angles.theta_base:.3f}")
         self.v_j1.var.set(f"{angles.joint1:.3f}")
         self.v_j2.var.set(f"{angles.joint2:.3f}")
+        self.v_j3_ang.var.set(f"{angles.joint3:.3f}")
         self.v_open_a.var.set("" if opening is None else f"{opening:.3f}")
         self.notebook.select(self.viz_tab_index)
         self._draw(angles, target, opening)

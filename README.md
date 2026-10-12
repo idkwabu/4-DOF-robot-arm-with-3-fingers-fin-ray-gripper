@@ -37,7 +37,7 @@ Read this section before assuming any of the above works on hardware.
 |---|---|
 | Natural-language parsing | Working, 91.0% of the holdout set |
 | Joint resolution and validation | Working |
-| Forward / inverse kinematics | Working as a library, broken via the `RobotArm` facade (see [known issues](#known-issues)) |
+| Forward / inverse kinematics | Working in both the module-level API and the `RobotArm` facade |
 | Tkinter GUIs | Working |
 | Fine-tuned model | Working, 99.9% end-to-end — **shipped weights predate the current dataset** |
 | **Hardware / servos** | **Not implemented. There is no serial, no GPIO, no firmware.** |
@@ -137,6 +137,7 @@ Dum-E.py     mind/mind.py          <- language layer
 | File | Responsibility |
 |---|---|
 | `Dum-E.py` | Main GUI. Contains its own copy of the parser and its own copy of the kinematics. |
+| `robot_contract.py` | Shared joint-limit contract imported by the GUI, CLI brain, and kinematics module. |
 | `mind/mind.py` | The language layer alone, as a CLI. Reference copy of the parser; the two copies are held byte-identical in behaviour by the differential harness. |
 | `mind/system_prompt.txt` | The contract handed to the model. Defines actions and directions. |
 | `mind/generate_robot_dataset.py` | Turns seed phrases into the training set. |
@@ -157,8 +158,8 @@ also contains its own copy of the forward kinematics. This is deliberate: it kee
 single file that runs standalone, and it guarantees the GUI and the CLI can never drift on
 the angle contract.
 
-The cost is real and is documented under [known issues](#known-issues) — the two kinematic
-copies have **different joint limits**, so they are not interchangeable.
+The geometry is still duplicated and can drift, but all three implementations import
+their physical joint ranges from the shared `robot_contract.py`.
 
 ---
 
@@ -302,7 +303,7 @@ The model also has a `default` direction for non-spatial actions (`home`, `stop`
 
 ```python
 JOINT_RANGES = {
-    "base":   (0, 180),      # 90 is mechanical centre, 0 and 180 are the stops
+    "base":   (-180, 180),   # signed yaw range; 90 is the command preset's centre
     "joint1": (0, 180),
     "joint2": (-150, 150),
     "joint3": (-150, 150),
@@ -389,12 +390,12 @@ which is the figure most references quote.
 The inner bound is a signed quantity reported as a distance. `m` crosses `L1 = 300 mm`
 at `joint3 = ±75°`, where the reported inner bound collapses to 0.00 mm; on either side
 of that the arm can reach essentially its own base. See
-[known issue 14](#14-absl1---m-hides-a-sign-change).
+[known issue 13](#13-absl1---m-hides-a-sign-change).
 
 Earlier revisions had the grip depth fall as the fingers opened (`l_g = FINGER_LENGTH·cos(spread)`),
 which made the envelope a *family* of curves — one per opening. The fingers are now rigid
 curled talons and `l_g` is the **constant** 41.35 mm, so the opening splay no longer touches
-the arm's kinematics at all. See [known issue 15](#15-opening-once-leaked-into-the-kinematic-chain).
+the arm's kinematics at all. See [known issue 14](#14-opening-once-leaked-into-the-kinematic-chain).
 
 ### Verification
 
@@ -570,7 +571,7 @@ back out.
 Targets outside `[|L1 - m|, L1 + m]`, or within `MIN_D_SHARE_LIMIT` of the pivot, raise
 `ValueError`. Joint limits are deliberately **not** applied here — use
 `check_joint_limits()` separately. Geometric reachability and joint limits are two
-different questions; see [issue 2](#2-the-two-kinematic-copies-have-different-joint-limits).
+different questions, although all interfaces now share the same configured ranges.
 
 ```python
 import robot_arm as ra
@@ -597,6 +598,8 @@ ra.inverse_kinematics(600, 0, 0, joint3="auto", opening=1.0)
 
 Near targets `(50, 0, 50)` reach it with `joint3 = -75°`, the folded configuration, which
 is why the inner reach bound collapses to nearly zero there.
+The requested `joint2_up` branch is searched across all wrist candidates first; only if
+that branch has no limit-valid solution does `"auto"` try the alternate elbow branch.
 
 ### Straight-down wrist (`joint3="down"`)
 
@@ -793,6 +796,14 @@ The remembered pose, per joint:
 default alone, so one bad value never erases the whole remembered pose. A missing or
 unparseable file falls back to `DEFAULT_STATE` outright.
 
+The main `Dum-E.py` GUI shares this file with `mind/mind.py` and mirrors the same
+five values to a root-level `robot_state.json` for convenient access. At startup it
+initializes that mirror from `mind/robot_state.json`; later GUI pose updates write both
+files. Command mode saves resolved commands; the joint-angle and XYZ modes save their
+validated pose when plotted or when an animation completes or is stopped. The stored
+gripper value is the opening percentage (0..100), converted from the visualization's
+0..1 input.
+
 Both files are written through `_write_json()`, which serialises to a sibling `.tmp` file
 and then renames it into place. The rename is atomic, so a crash or a full disk cannot
 leave a half-written state file behind.
@@ -833,57 +844,24 @@ python mind/verify_model.py
 
 ## Known issues
 
-Everything below is a real, current defect. None of it is hypothetical.
+The list below tracks known repository issues; historical fixes are noted where useful.
+The previously reported `RobotArm` facade argument-forwarding defect is fixed; see
+[`movements/README.md`](movements/README.md#class-based-usage) for the corrected API.
 
-### 1. The `RobotArm` facade is missing `joint3` and passes the wrong arity
+### 1. Joint-limit drift between kinematics copies — resolved
 
-`movements/robot_arm.py` defines `forward_kinematics` with six parameters. The
-`RobotArm.forward_kinematics` method at **`robot_arm.py:1099`** declares only four —
-`joint3` is missing from its signature entirely — and then calls through with five
-arguments, so `self.config` lands in the `joint3` slot. The CLI's first menu option
-crashes with `TypeError: must be real number, not RobotConfig`.
+`Dum-E.py`, `mind/mind.py`, and `movements/robot_arm.py` now import the physical joint
+ranges from `robot_contract.py`: base is `−180–180°`, joint1 is `0–180°`, and joint2/joint3
+are `−150–150°`. The mathematical implementations remain separate, so they can still
+drift in behavior even though their configured limits match.
 
-The same omission appears at **`robot_arm.py:1227`**, which calls
-`forward_kinematics(a.theta_base, a.joint1, a.joint2, config, opening)` without
-`a.joint3`. Line 1266 in the same file gets it right, so the two are inconsistent with
-each other.
-
-Five of the seven public `RobotArm` methods are affected. Only `plot` and `verify` work:
-
-| Method | Status |
-|---|---|
-| `check_joint_limits` | broken — 3 required arguments missing |
-| `forward_kinematics` | broken — 1 required argument missing |
-| `gripper_pose` | broken — 3 required arguments missing |
-| `inverse_kinematics` | broken — 3 required arguments missing |
-| `is_reachable` | broken — 3 required arguments missing |
-| `plot` | works |
-| `verify` | works |
-
-`RobotArm.inverse_kinematics` has the mirror problem: it accepts no `joint3` and no
-`config`, so it cannot reproduce the module-level signature it shadows.
-
-The module-level functions are all correct, which is why the GUI and the tests pass.
-
-### 2. The two kinematic copies have different joint limits
-
-| Joint | `mind` / `Dum-E.py` | `movements/robot_arm.py` |
-|---|---|---|
-| `base` | 0 – 180 | -180 – 180 |
-| `joint1` | 0 – 180 | -90 – 110 |
-| `POSITION_TOLERANCE_MM` | 0.5 | 0.1 |
-
-The language layer cannot command a base angle the kinematics layer would consider valid.
-Worse, `movements/robot_arm.py` is the more restrictive one, so the duplicate is not merely
-redundant — it disagrees with the code that actually plans the motion.
-
-### 3. The shipped adapter predates the current dataset
+### 2. The shipped adapter predates the current dataset
 
 `mind/dum-e-qwen3-robot/` is the **pre-retrain** adapter. The committed datasets contain
 `up-middle` and `down-middle`, which the shipped weights have never been trained on.
 Behaviour for those two directions is handled by the deterministic parser, not the model.
 
-### 4. A full retrain regressed and was rolled back
+### 3. A full retrain regressed and was rolled back
 
 A 1000-step retrain on the current data (2026-09-28) reduced accuracy:
 
@@ -902,38 +880,38 @@ artifacts are preserved at
 `%TEMP%\opencode\model_new_trained\` for inspection. **Do not retrain until the seed
 overlap is fixed.**
 
-### 5. A seed's verb contradicts its label
+### 4. A seed's verb contradicts its label
 
 The seed `"Tilt down and center the base"` is labelled `move` / `down-middle`, but
 "tilt" is a `tilt` action. This teaches the model that action words are unreliable, and it
-is a contributing cause of issue 4.
+is a contributing cause of issue 3.
 
-### 6. `HELP_TEXT` does not list the compound middle directions
+### 5. `HELP_TEXT` does not list the compound middle directions
 
 `HELP_TEXT` in both `Dum-E.py` and `mind/mind.py` advertises `move up-left/up-right/down-left/down-right`
 but omits `up-middle` and `down-middle`, which the parser fully supports. Ask the model for
 help and it will under-report its own vocabulary.
 
-### 7. `_load_model()` has no error handling
+### 6. `_load_model()` has no error handling
 
 Both `Dum-E.py` and `mind/mind.py` call `_load_model()` at the top level with no
 `try`/`except`. Because the merged model is gitignored, a fresh clone hits this on the
 first prompt that the parser cannot answer, and the user gets a `from_pretrained` stack
 trace instead of "run `mind/merge_robot.py` first".
 
-### 8. `mind/Dum-E.spec` cannot produce a working build
+### 7. `mind/Dum-E.spec` cannot produce a working build
 
 The PyInstaller spec packages `mind/mind.py` — the CLI — rather than `Dum-E.py`, and
 specifies `datas=[]`, so the 1.19 GB merged model is not bundled. A frozen build will
 start and then fail on its first model load.
 
-### 9. An orphan file at the repository root
+### 8. An orphan file at the repository root
 
 `robot_command.json` exists at the repo root. The brain reads and writes
 `mind/robot_command.json`. Nothing reads the root copy. It is a leftover from the pre-`mind/`
 layout and is gitignored.
 
-### 10. Sub-documentation was stale — corrected in this release
+### 9. Sub-documentation was stale — corrected in this release
 
 Both sub-documents previously carried numbers derived from a gripper model the code never
 used: `l_g = finger_length/2 · cos(spread)`, a pre-tripod **half-length** model. Under it,
@@ -945,15 +923,16 @@ gripper models; that, not a typo, is why every downstream number was off.
 
 That full-length model has itself since been replaced: the fingers are now rigid curled
 talons and the grip depth is the constant `l_g = 41.35 mm` (see
-[issue 15](#15-opening-once-leaked-into-the-kinematic-chain)). The current figures are
+[issue 14](#14-opening-once-leaked-into-the-kinematic-chain)). The current figures are
 `m_g = 320.53 mm` at `joint3 = -60°` and a maximum reach of **661.35 mm** at `joint3 = 0°`.
 
 Also stale and now fixed:
 
-- `movements/README.md` glossed DOF as 3, built `JointAngles` with three arguments
-  against a four-field dataclass, omitted `joint3` from most FK/IK signatures and all
-  `RobotArm` examples, described `WRIST_STEM_ANGLE` as a *fixed* stem kink rather than a
-  commandable fourth joint, and omitted `joint3` from the `JOINT_LIMITS` listing.
+- `movements/README.md` once glossed DOF as 3, built `JointAngles` with three arguments
+  against a four-field dataclass, omitted `joint3` from most FK/IK signatures, described
+  `WRIST_STEM_ANGLE` as a *fixed* stem kink rather than a commandable fourth joint, and
+  omitted `joint3` from the `JOINT_LIMITS` listing. It now documents the repaired
+  `RobotArm` facade as well.
 - `mind/README-DUM-E.txt` reported `test_resolver.py` as having 211 assertions where the
   suite runs 736.
 
@@ -961,37 +940,33 @@ Every numeric claim in `movements/README.md` is now re-derived from
 `movements/robot_arm.py`, and every Python block in both documents executes as written.
 Trust the source code over any document for numeric values.
 
-### 11. `features_macro/hand_recognition.py` is empty
+### 10. `features_macro/hand_recognition.py` is empty
 
 A 0-byte file. No MediaPipe, no OpenCV, no gesture recognition of any kind. The directory
 is a placeholder.
 
-### 12. `explain.txt` has been removed
+### 11. `explain.txt` has been removed
 
 It was tracked but described a different system: an ESP32/Arduino C++ firmware with
 `JOINT_PINS`, 150 mm links, and a `MOVE_JOINT` text protocol. None of that exists in this
 repository. It was the design ancestor of the current `{"action", "direction"}` flow, not
 documentation of it, so the deletion is committed and the file is gitignored.
 
-### 13. The reach envelope depends on `joint3`, and dead code hides it
+### 12. The reach envelope depends on `joint3`, and dead code hides it
 
-There are **two** functions that compute reach bounds:
+`movements/robot_arm.py` once had two functions that computed reach bounds:
 
-| Function | Line | Uses |
+| Function | Status | Uses |
 |---|---|---|
-| `_reach_bounds` | 206 | `φ` pinned to `WRIST_STEM_ANGLE` — **dead code, never called** |
-| `_reach_bounds_with_joint3` | 439 | `φ = joint3` — used by `is_reachable` at line 659 |
+| `_reach_bounds` | removed | `φ` pinned to `WRIST_STEM_ANGLE`; obsolete helper |
+| `_reach_bounds_with_joint3` | current | `φ = joint3`; used by `is_reachable` |
 
-The live path is correct. The dead one is only accidentally right when
-`joint3 == WRIST_STEM_ANGLE == -60°`, which is the default, so its wrong answer looks
-plausible. An earlier revision of this README published `21.97 – 621.97 mm` as *the*
-reach envelope, taken from the dead function's assumption. Maximum reach is in fact
-**661.35 mm**, at `joint3 = 0°`.
+The live movement-library path is `joint3`-aware. The obsolete helper was accidentally
+right only when `joint3 == WRIST_STEM_ANGLE == -60°`; it has been removed so there is no
+competing reach-bound implementation. The unused reach helpers in `Dum-E.py` were also
+removed; its `is_reachable` delegates to inverse kinematics directly.
 
-`_reach_bounds` should be deleted, or made `joint3`-aware, so the two cannot disagree
-again.
-
-### 14. `abs(L1 - m)` hides a sign change
+### 13. `abs(L1 - m)` hides a sign change
 
 The inner reach bound is reported as `abs(L1 - m)`, but `L1 - m` is genuinely **negative**
 across most of the range: `m` exceeds `L1 = 300 mm` for any `joint3` between roughly
@@ -1003,7 +978,7 @@ At `joint3 = ±75°` exactly, `m = L1`, and the reported inner bound collapses t
 the number a caller should compare against, but it hides the fact that the arm is fully
 folded there. The signed value is the more informative quantity.
 
-### 15. Opening once leaked into the kinematic chain
+### 14. Opening once leaked into the kinematic chain
 
 The grip depth used to be computed from the finger spread,
 `l_g = FINGER_LENGTH · cos(spread)`, which is a property of the *gripper* but was fed

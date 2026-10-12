@@ -110,7 +110,8 @@ def test_validation_rejects():
         return command
 
     check_true("joint2 above its range is rejected", not mind.is_valid_command(mutate(joint2=200)))
-    check_true("negative base is rejected", not mind.is_valid_command(mutate(base=-5)))
+    check_true("negative base inside signed yaw range is accepted", mind.is_valid_command(mutate(base=-5)))
+    check_true("base below signed yaw range is rejected", not mind.is_valid_command(mutate(base=-181)))
     check_true("gripper above 100 is rejected", not mind.is_valid_command(mutate(gripper=150)))
     check_true("joint1 above 180 is rejected", not mind.is_valid_command(mutate(joint1=181)))
     check_true("a missing field is rejected", not mind.is_valid_command({"action": "move", "direction": "up"}))

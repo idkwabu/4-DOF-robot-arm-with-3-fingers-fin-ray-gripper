@@ -4,6 +4,9 @@ import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE_DIR.parent))
+from robot_contract import JOINT_LIMITS
+
 MODEL_PATH = BASE_DIR / "dum-e-qwen3-merged"
 COMMAND_FILE = BASE_DIR / "robot_command.json"
 STATE_FILE = BASE_DIR / "robot_state.json"
@@ -11,13 +14,7 @@ PROMPT_FILE = BASE_DIR / "system_prompt.txt"
 
 DEFAULT_STATE = {"base": 90, "joint1": 90, "joint2": -60, "joint3": -60, "gripper": 50}
 ALL_JOINTS = tuple(DEFAULT_STATE)
-JOINT_RANGES = {
-    "base": (0, 180),
-    "joint1": (0, 180),
-    "joint2": (-150, 150),
-    "joint3": (-150, 150),
-    "gripper": (0, 100),
-}
+JOINT_RANGES = {**JOINT_LIMITS, "gripper": (0, 100)}
 
 DIRECTION_PRESETS = {
     "up": {"joint1": 120, "joint2": -60, "joint3": -30},
@@ -162,8 +159,8 @@ JOINT_ALIASES = {
 
 HELP_TEXT = (
     "I understand: turn left/right, tilt up/down, move up-left/up-right/"
-    "down-left/down-right, open or close the gripper, set a joint to a number, "
-    "go home, stop, status.\n\n"
+    "down-left/down-right/up-middle/down-middle, open or close the gripper, "
+    "set a joint to a number, go home, stop, status.\n\n"
     "A plain turn swings 45 degrees off the middle. Add 'all the way', "
     "'as far as you can', 'fully', 'completely', 'hard' or 'max' for the full "
     "90: 'turn all the way left' swings to the stop, 'turn left' does not.\n\n"

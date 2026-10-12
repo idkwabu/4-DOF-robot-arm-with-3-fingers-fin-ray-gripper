@@ -104,7 +104,7 @@ mean "unchanged", and they are filled in before anything is written.
 The first pose is the home state above, so a command that names only the base
 still arrives as a full set of five angles.
 
-Ranges: base 0..180, joint1 0..180, joint2 and joint3 -150..150, gripper
+Ranges: base -180..180, joint1 0..180, joint2 and joint3 -150..150, gripper
 0..100.
 
 Numbers are accepted as digits or words ("one hundred and thirty five" is
@@ -127,8 +127,8 @@ Files
     system_prompt.txt           the model's instructions, and the only copy
     test_resolver.py            736 checks, no model needed
     verify_model.py             end-to-end check against the held-out split
-    generate_robot_dataset.py   rebuilds robot_dataset.jsonl / _eval.jsonl
-    train_robot.py              QLoRA fine-tune, 1000 steps
+    generate_robot_dataset.py   rebuilds train, validation, and final holdout data
+    train_robot.py              QLoRA fine-tune with live validation progress
     merge_robot.py              merges the adapter into dum-e-qwen3-merged
     robot_command.json          the output, read by the hardware
     robot_state.json            the remembered pose
@@ -147,6 +147,12 @@ Edit system_prompt.txt and rerun from generate_robot_dataset.py onwards: the
 prompt is embedded in every training row, so changing it without rebuilding
 the dataset leaves the model and its training data disagreeing. verify_model.py
 refuses to run if it detects that.
+
+Training displays a progress bar and training loss, evaluates validation loss
+and balanced exact-intent accuracy every 100 steps, and saves the best
+validation-accuracy checkpoint. The validation split holds out complete prompt
+seed families from training. robot_dataset_eval.jsonl remains a separate final
+holdout and is used only for the post-training accuracy check.
 
 verify_model.py scores the pipeline the way the robot actually uses it: the
 local parser is checked against every held-out prompt, and the model is scored
