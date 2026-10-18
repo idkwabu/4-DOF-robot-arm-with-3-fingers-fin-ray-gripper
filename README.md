@@ -40,7 +40,7 @@ Read this section before assuming any of the above works on hardware.
 | Forward / inverse kinematics | Working in both the module-level API and the `RobotArm` facade |
 | Tkinter GUIs | Working |
 | Fine-tuned model | Working, 99.9% end-to-end — **shipped weights predate the current dataset** |
-| **Hardware / servos** | **Not implemented. There is no serial, no GPIO, no firmware.** |
+| **Hardware / servos** | A five-servo Arduino serial controller is provided; hardware calibration is required. |
 | **"Fin-ray" gripper** | **Kinematic only.** Three rigid *curled* fingers (a circular arc of fixed curvature — no joint along a finger). No tendons, no underactuation, no compliant elements. The opening swings the whole finger and is animated, but never changes the reach. |
 | Hand / gesture recognition | Not implemented. `features_macro/hand_recognition.py` is a 0-byte placeholder. |
 
@@ -49,9 +49,43 @@ today is a rigid three-finger gripper whose fingers are curled talons (see the g
 geometry in `movements/robot_arm.py` and `movements/README.md`), not a compliant fin-ray
 or a straight-finger cone. Nothing in the code contradicts that.
 
-Nothing in this repository talks to a physical robot. The output of a command is a JSON
-file naming the action, the direction, and five absolute joint angles. What you do with
-it is up to you.
+The language and GUI layers write pose values to `robot_state.json`. `servo_controller.py`
+can stream that file to an Arduino running `irl/irl.ino`; the servo positions are scaled
+from each joint's logical range to the hobby-servo range of 0..180 degrees.
+
+### Running the servo controller
+
+Install `pyserial`, connect five servos to Arduino pins **3, 5, 6, 9, and 10** in the order
+base, joint1, joint2, joint3, gripper, and upload `irl/irl.ino`. The sketch reads one
+comma-separated line of five servo angles (0..180) at 115200 baud, applies the full line,
+and replies `OK` or `ERR`. It attaches the servos on receipt of the first valid pose.
+
+For an Arduino Uno with Arduino CLI installed, install the AVR board core, compile, and
+upload the sketch (replace `COM3` with the board's port):
+
+```bash
+arduino-cli core update-index
+arduino-cli core install arduino:avr
+arduino-cli compile --fqbn arduino:avr:uno irl
+arduino-cli upload -p COM3 --fqbn arduino:avr:uno irl
+```
+
+Install `pyserial` and start the watcher:
+
+```bash
+pip install pyserial
+python servo_controller.py --port COM3
+```
+
+The watcher reads the root `robot_state.json` by default and sends each changed pose. Use
+`--state PATH` to choose another JSON file, `--baud RATE` to override the 115200 baud
+default, or `--poll SECONDS` to change the 0.1-second polling interval. It validates each
+joint against its logical limits and linearly maps the whole logical range to 0..180:
+base -180..180, joint1 0..180, joint2 and joint3 -150..150, and gripper 0..100. These are
+generic mappings, not hardware calibration: adjust servo direction, neutral point, and
+mechanical travel for your specific arm before attaching linkages. Power servos from a
+suitable external supply, not the Arduino 5V pin, and connect the supply ground to Arduino
+ground. Keep clear of the arm during initial calibration.
 
 ---
 
