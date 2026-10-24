@@ -11,7 +11,7 @@ class RobotArmFacadeTests(unittest.TestCase):
         config = ra.DEFAULT_CONFIG
         self.assertEqual(
             (config.l0, config.l1, config.l2, config.l3, config.finger_length),
-            (100.0, 500.0, 400.0, 80.0, 150.0),
+            (100.0, 400.0, 300.0, 80.0, 150.0),
         )
         self.assertAlmostEqual(ra.GRIP_DEPTH, 124.0490014699)
 

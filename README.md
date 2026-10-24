@@ -370,8 +370,8 @@ agrees with it. Where anything still conflicts, the source is correct.
 | Symbol | Value | Meaning |
 |---|---|---|
 | `L0` | 100 mm | Fixed vertical base column, not a controlled joint |
-| `L1` | 500 mm | Upper arm, driven by `joint1` |
-| `L2` | 400 mm | Forearm, driven by `joint2` |
+| `L1` | 400 mm | Upper arm, driven by `joint1` |
+| `L2` | 300 mm | Forearm, driven by `joint2` |
 | `L3` | 80 mm | Wrist link, driven by `joint3` |
 | `WRIST_STEM_ANGLE` | -60° | Fixed wrist-to-finger offset |
 | `GRIPPER_FINGERS` | 3 | |
@@ -396,7 +396,7 @@ Not the wrist. The return value is the point between the fingertips, which is wh
 import robot_arm as ra
 
 ra.forward_kinematics(45, 30, -20, -60, ra.DEFAULT_CONFIG, 1.0)
-# -> CartesianPoint(x=677.4762, y=677.4762, z=263.1487) mm
+# -> CartesianPoint(x=546.6025, y=546.6025, z=195.7838) mm
 ```
 
 ### Reach envelope
@@ -408,21 +408,21 @@ grasp point is a fixed on-axis depth, so there is one envelope per `joint3`:
 
 | `joint3` | Reach |
 |---|---|
-| −150° | 254.51 – 745.49 mm |
-| −120° | 153.57 – 846.43 mm |
-| −90° | 50.96 – 949.04 mm |
-| −60° (default) | 32.22 – 1032.22 mm |
-| −30° | 85.67 – 1085.67 mm |
-| **0°** | 104.05 – **1104.05 mm** |
-| +60° | 32.22 – 1032.22 mm |
-| +90° | 50.96 – 949.04 mm |
-| +150° | 254.51 – 745.49 mm |
+| −150° | 239.97 – 560.03 mm |
+| −120° | 134.63 – 665.37 mm |
+| −90° | 37.18 – 762.82 mm |
+| −60° (default) | 39.15 – 839.15 mm |
+| −30° | 87.51 – 887.51 mm |
+| **0°** | 104.05 – **904.05 mm** |
+| +60° | 39.15 – 839.15 mm |
+| +90° | 37.18 – 762.82 mm |
+| +150° | 239.97 – 560.03 mm |
 
-**Maximum reach is 1104.05 mm, at `joint3 = 0°`** — not at the `joint3 = −60°` default,
+**Maximum reach is 904.05 mm, at `joint3 = 0°`** — not at the `joint3 = −60°` default,
 which is the figure most references quote.
 
-The inner bound is a signed quantity reported as a distance. `m` crosses `L1 = 500 mm`
-at `joint3 ≈ ±72.77°`, where the reported inner bound collapses to 0.00 mm; on either side
+The inner bound is a signed quantity reported as a distance. `m` crosses `L1 = 400 mm`
+at `joint3 ≈ ±76.60°`, where the reported inner bound collapses to 0.00 mm; on either side
 of that the arm can reach essentially its own base. See
 [known issue 13](#13-absl1---m-hides-a-sign-change).
 
@@ -513,10 +513,10 @@ arm into a plain two-link arm** with links `(L1, m)`.
 For the stem alone, with no finger contribution:
 
 ```
-m = |400 + 80·e^(i(-60°))| = 445.421 mm      δ = -8.948°
+m = |300 + 80·e^(i(-60°))| = 346.987 mm      δ = -11.518°
 ```
 
-Compare that with the naive `L2 + L3 = 480 mm`. Folding saves **34.579 mm**, because `L3`
+Compare that with the naive `L2 + L3 = 380 mm`. Folding saves **33.013 mm**, because `L3`
 is pitched −60° rather than collinear with `L2`. Treating the links as a simple sum
 overstates the arm's length by nearly a tenth.
 
@@ -547,21 +547,21 @@ tool axis, whose unit vector is
 Worked example, the `up` preset `(90, 120, -60, -30)`:
 
 ```
-r₂ = 500·cos(120°)              = -250.000   z₂ = 100 + 500·sin(120°)   = 533.013
-r₃ = -250 + 400·cos(60°)        =  -50.000   z₃ = 533.013 + 400·sin(60°)= 879.423
-r_m = -50 + 80·cos(30°)         =   19.282   z_m = 879.423 + 80·sin(30°)= 919.423
+r₂ = 400·cos(120°)              = -200.000   z₂ = 100 + 400·sin(120°)   = 446.410
+r₃ = -200 + 300·cos(60°)        =  -50.000   z₃ = 446.410 + 300·sin(60°)= 706.218
+r_m = -50 + 80·cos(30°)         =   19.282   z_m = 706.218 + 80·sin(30°)= 746.218
 x   = 19.282·cos(90°)           =    0.000   y   = 19.282·sin(90°)      =  19.282
 ```
 
 The grip point then advances `l_g = 124.049` mm along the tool axis, whose unit vector at
-`γ = 30°` is `(0, 0.866025, 0.500000)`, giving `(0.00, 126.71, 981.45)` mm. Verify it
+`γ = 30°` is `(0, 0.866025, 0.500000)`, giving `(0.00, 126.71, 808.24)` mm. Verify it
 yourself:
 
 ```python
 import robot_arm as ra
 
 ra.forward_kinematics(90, 120, -60, -30, ra.DEFAULT_CONFIG, 1.0)
-# -> CartesianPoint(x=0.0, y=126.7116, z=981.4474) mm
+# -> CartesianPoint(x=0.0, y=126.7116, z=808.2423) mm
 ```
 
 ### The distance identity
@@ -611,7 +611,7 @@ different questions, although all interfaces now share the same configured range
 import robot_arm as ra
 
 a = ra.inverse_kinematics(300, 0, 200, joint2_up=True, opening=1.0)
-# JointAngles(theta_base=0.0, joint1=96.25, joint2=-125.10, joint3=-60.0)
+# JointAngles(theta_base=0.0, joint1=93.04, joint2=-112.30, joint3=-60.0)
 ra.forward_kinematics(a.theta_base, a.joint1, a.joint2, a.joint3, ra.DEFAULT_CONFIG, 1.0)
 # -> (300.00, 0.00, 200.00) mm, exactly on target
 ```
@@ -627,7 +627,7 @@ both geometrically reachable and inside every joint limit:
 import robot_arm as ra
 
 ra.inverse_kinematics(600, 0, 0, joint3="auto", opening=1.0)
-# -> JointAngles(theta_base=0.0, joint1=46.923, joint2=-88.471, joint3=-60.0)
+# -> JointAngles(theta_base=0.0, joint1=36.683, joint2=-63.474, joint3=-60.0)
 ```
 
 Near targets `(50, 0, 50)` reach it with `joint3 = -75°`, the folded configuration, which
@@ -646,7 +646,7 @@ gripper always approaches the target along a vertical line:
 import robot_arm as ra
 
 a = ra.inverse_kinematics(300, 120, 150, joint3="down", opening=1.0)
-# -> JointAngles(theta_base=21.801, joint1=89.127, joint2=-127.060, joint3=-52.068)
+# -> JointAngles(theta_base=21.801, joint1=81.569, joint2=-109.740, joint3=-61.830)
 a.joint1 + a.joint2 + a.joint3
 # -> -90.0
 ```
@@ -958,7 +958,7 @@ gripper models; that, not a typo, is why every downstream number was off.
 That full-length model has itself since been replaced: the fingers are now rigid curled
 talons and the grip depth is the constant `l_g = 124.05 mm` (see
 [issue 14](#14-opening-once-leaked-into-the-kinematic-chain)). The current figures are
-`m_g = 532.22 mm` at `joint3 = -60°` and a maximum reach of **1104.05 mm** at `joint3 = 0°`.
+`m_g = 439.15 mm` at `joint3 = -60°` and a maximum reach of **904.05 mm** at `joint3 = 0°`.
 
 Also stale and now fixed:
 
@@ -1003,11 +1003,11 @@ removed; its `is_reachable` delegates to inverse kinematics directly.
 ### 13. `abs(L1 - m)` hides a sign change
 
 The inner reach bound is reported as `abs(L1 - m)`, but `L1 - m` is genuinely **negative**
-across most of the range: `m` exceeds `L1 = 500 mm` for any `joint3` between roughly
-−72.77° and +72.77°, and is symmetric in the sign of `joint3` because `m` depends on
+across most of the range: `m` exceeds `L1 = 400 mm` for any `joint3` between roughly
+−76.60° and +76.60°, and is symmetric in the sign of `joint3` because `m` depends on
 `cos(joint3)`.
 
-At `joint3 = ±75°` exactly, `m = L1`, and the reported inner bound collapses to
+At `joint3 ≈ ±76.60°`, `m = L1`, and the reported inner bound collapses to
 **0.00 mm** — the arm can reach its own base. That is correct as a *distance*, and it is
 the number a caller should compare against, but it hides the fact that the arm is fully
 folded there. The signed value is the more informative quantity.

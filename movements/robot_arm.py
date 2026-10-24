@@ -43,8 +43,8 @@ from robot_contract import JOINT_LIMITS
 
 # Link lengths in millimetres.
 L0: float = 100.0
-L1: float = 500.0
-L2: float = 400.0
+L1: float = 400.0
+L2: float = 300.0
 L3: float = 80.0
 
 # Fixed orientation of L3 relative to L2.
@@ -96,7 +96,7 @@ GRIP_DEPTH: float = FINGER_ARC_RADIUS * math.sin(math.radians(FINGER_CURL_DEG))
 #                            sign of (joint2 + delta_g), not by the raw sign
 #                            of joint2 (see the module docstring).  Targets
 #                            close to the base still push |joint2| toward
-#                            ~136 deg, so the elbow limit is the binding
+#                            ~150 deg, so the elbow limit is the binding
 #                            constraint on the inner part of the workspace.
 #   joint3:   (-150, 150)    relative angle of link 3 (wrist stem L3) w.r.t. link 2.
 #                            This is the wrist angle between the forearm and the

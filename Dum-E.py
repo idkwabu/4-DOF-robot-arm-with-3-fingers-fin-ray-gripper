@@ -114,8 +114,8 @@ COMMAND_KEYS = frozenset({"action", "direction", *ALL_JOINTS})
 
 # Link lengths in millimetres and the 3-finger end effector.
 L0 = 100.0
-L1 = 500.0
-L2 = 400.0
+L1 = 400.0
+L2 = 300.0
 L3 = 80.0
 FINGER_COUNT = 3
 FINGER_LENGTH = 150.0  # Lf: arc length of one rigid finger [mm]
