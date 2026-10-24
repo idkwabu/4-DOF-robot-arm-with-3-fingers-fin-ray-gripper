@@ -113,12 +113,12 @@ ALL_ACTIONS = MOVE_ACTIONS | CONTROL_ACTIONS
 COMMAND_KEYS = frozenset({"action", "direction", *ALL_JOINTS})
 
 # Link lengths in millimetres and the 3-finger end effector.
-L0 = 50.0
-L1 = 300.0
-L2 = 250.0
-L3 = 70.0
+L0 = 100.0
+L1 = 500.0
+L2 = 400.0
+L3 = 80.0
 FINGER_COUNT = 3
-FINGER_LENGTH = 50.0
+FINGER_LENGTH = 150.0  # Lf: arc length of one rigid finger [mm]
 FINGER_SPREAD_DEG = 30.0
 # A finger is one RIGID curved bar (a talon), not a straight segment and not a
 # hinged chain: its curvature never changes, and `opening` only swings the whole

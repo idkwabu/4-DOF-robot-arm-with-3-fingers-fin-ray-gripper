@@ -7,6 +7,14 @@ from robot_arm_gui import RobotArmApp
 
 
 class RobotArmFacadeTests(unittest.TestCase):
+    def test_default_geometry_matches_robot_dimensions(self):
+        config = ra.DEFAULT_CONFIG
+        self.assertEqual(
+            (config.l0, config.l1, config.l2, config.l3, config.finger_length),
+            (100.0, 500.0, 400.0, 80.0, 150.0),
+        )
+        self.assertAlmostEqual(ra.GRIP_DEPTH, 124.0490014699)
+
     def test_facade_forwards_four_joint_kinematics(self):
         config = ra.RobotConfig(l0=55.0)
         arm = ra.RobotArm(config)

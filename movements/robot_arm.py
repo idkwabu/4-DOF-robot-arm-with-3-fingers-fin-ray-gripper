@@ -13,7 +13,7 @@ The physical chain is::
     base -> fixed vertical L0 -> joint1 -> L1 -> joint2 -> L2 -> joint3
          -> L3 -> gripper_mount -> fingers
 
-L0 is a fixed 50 mm vertical link. The base yaw rotates the radial-Z arm
+L0 is a fixed 100 mm vertical link. The base yaw rotates the radial-Z arm
 around +Z but cannot tilt L0. joint1 tilts L1, joint2 tilts L2 relative
 to L1, and joint3 tilts L3 relative to L2.
 The grip point is the on-axis centroid of the three fingertips, so forward
@@ -42,10 +42,10 @@ from robot_contract import JOINT_LIMITS
 # =====================================================================
 
 # Link lengths in millimetres.
-L0: float = 50.0
-L1: float = 300.0
-L2: float = 250.0
-L3: float = 70.0
+L0: float = 100.0
+L1: float = 500.0
+L2: float = 400.0
+L3: float = 80.0
 
 # Fixed orientation of L3 relative to L2.
 WRIST_STEM_ANGLE: float = -60.0
@@ -59,7 +59,7 @@ STEM_DOWN_ANGLE_DEG: float = -90.0
 
 # Simulated 3-finger gripper (kinematic end-effector, visual + reachable).
 GRIPPER_FINGERS: int = 3        # number of fingers (3 = tripod, 120 deg apart)
-FINGER_LENGTH: float = 50.0     # arc length of one rigid finger [mm]
+FINGER_LENGTH: float = 150.0    # Lf: arc length of one rigid finger [mm]
 FINGER_OPENING_DEG: float = 30.0  # how far the whole finger swings off the tool axis [deg]
 # A finger is one RIGID curved bar (a talon), not a straight segment and not a
 # hinged chain: its curvature never changes, and `opening` only swings the whole
