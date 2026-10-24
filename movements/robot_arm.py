@@ -1026,6 +1026,8 @@ def verify_fk_ik(
 # 10. 3D VISUALIZATION (matplotlib)
 # =====================================================================
 
+BASE_RADIUS_MM: float = 50.0
+
 
 def _set_equal_aspect(ax, points) -> None:
     """Force equal visual scale on all three axes, with symmetric limits."""
@@ -1069,6 +1071,10 @@ def _plot_points_for_pose(
     points += list(gripper.fingertips)
     for path in gripper.finger_paths:
         points.extend(path)
+    points.extend(
+        CartesianPoint(BASE_RADIUS_MM * math.cos(angle), BASE_RADIUS_MM * math.sin(angle), 0.0)
+        for angle in (0.0, math.pi / 2, math.pi, 3 * math.pi / 2)
+    )
     if target is not None:
         points.append(target)
     return points
@@ -1160,6 +1166,22 @@ def draw_robot(
 
     # Base post (visual only, not part of the FK model).
     ax.plot([0, 0], [0, 0], [0, -axis_len * 0.2], color="k", linewidth=3)
+    import numpy as np
+
+    radius, theta = np.meshgrid(
+        np.linspace(0.0, BASE_RADIUS_MM, 12),
+        np.linspace(0.0, 2.0 * math.pi, 64),
+    )
+    ax.plot_surface(
+        radius * np.cos(theta),
+        radius * np.sin(theta),
+        np.zeros_like(radius),
+        color="dimgray",
+        alpha=0.45,
+        linewidth=0,
+        shade=False,
+        label=f"base platform (R={BASE_RADIUS_MM:g} mm)",
+    )
 
     xs = [base.x, joint1_pos.x, joint2_pos.x, joint3.x, gripper_mount.x]
     ys = [base.y, joint1_pos.y, joint2_pos.y, joint3.y, gripper_mount.y]
@@ -1218,6 +1240,10 @@ def draw_robot(
     ax.legend(loc="upper left", fontsize=8)
     plot_points = [base, joint1_pos, joint2_pos, joint3, gripper.grip_point]
     plot_points += list(gripper.fingertips)
+    plot_points.extend(
+        CartesianPoint(BASE_RADIUS_MM * math.cos(angle), BASE_RADIUS_MM * math.sin(angle), 0.0)
+        for angle in (0.0, math.pi / 2, math.pi, 3 * math.pi / 2)
+    )
     if target is not None:
         plot_points.append(target)
     if fixed_limits is not None:

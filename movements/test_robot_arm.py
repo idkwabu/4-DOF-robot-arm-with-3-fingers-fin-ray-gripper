@@ -15,6 +15,41 @@ class RobotArmFacadeTests(unittest.TestCase):
         )
         self.assertAlmostEqual(ra.GRIP_DEPTH, 124.0490014699)
 
+    def test_base_platform_circle_is_visual_only(self):
+        angles = ra.JointAngles(0.0, 45.0, -20.0, -60.0)
+        grip_before = ra.forward_kinematics(
+            angles.theta_base, angles.joint1, angles.joint2, angles.joint3
+        )
+        axis = Mock()
+
+        points = ra.draw_robot(axis, angles)
+
+        grip_after = ra.forward_kinematics(
+            angles.theta_base, angles.joint1, angles.joint2, angles.joint3
+        )
+        self.assertEqual(grip_after, grip_before)
+        disk = next(
+            call for call in axis.plot_surface.call_args_list
+            if call.kwargs.get("label") == "base platform (R=50 mm)"
+        )
+        xs, ys, zs = disk.args
+        self.assertEqual(xs.shape, (64, 12))
+        self.assertEqual(ys.shape, (64, 12))
+        self.assertEqual(zs.shape, (64, 12))
+        radii = [math.hypot(float(x), float(y)) for x, y in zip(xs.flat, ys.flat)]
+        self.assertTrue(math.isclose(max(radii), 50.0))
+        self.assertEqual(min(radii), 0.0)
+        self.assertTrue((zs == 0.0).all())
+        self.assertEqual(disk.kwargs["alpha"], 0.45)
+        self.assertTrue(
+            any(
+                math.isclose(point.x, -50.0, abs_tol=1e-12)
+                and math.isclose(point.y, 0.0, abs_tol=1e-12)
+                and math.isclose(point.z, 0.0, abs_tol=1e-12)
+                for point in points
+            )
+        )
+
     def test_facade_forwards_four_joint_kinematics(self):
         config = ra.RobotConfig(l0=55.0)
         arm = ra.RobotArm(config)

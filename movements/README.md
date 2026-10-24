@@ -815,6 +815,8 @@ its own window; the tkinter GUI embeds the same picture via the shared
 `draw_robot(ax, angles, ...)` primitive (both draw with identical
 formulas/artists). The drawing includes:
 
+- a visual-only, filled circular base platform of 50 mm radius in the XY
+  plane at the origin; it is a drawing aid and does not alter the kinematic model,
 - base, joint-1, joint-2, and wrist markers,
 - the robot links (drawn from the FK joint positions, identical formulas),
 - **the `GRIPPER_FINGERS` finger segments** from the wrist (cyan) up to each

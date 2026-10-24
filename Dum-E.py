@@ -1429,6 +1429,10 @@ def animation_limits(
                 f"frame count {len(frames)}."
             )
     points: list[CartesianPoint] = []
+    points.extend(
+        CartesianPoint(BASE_RADIUS_MM * math.cos(angle), BASE_RADIUS_MM * math.sin(angle), 0.0)
+        for angle in (0.0, math.pi / 2, math.pi, 3 * math.pi / 2)
+    )
     for angles, op in zip(frames, openings):
         pose = gripper_pose(angles, op, config)
         points.extend([pose.joint1, pose.joint2, pose.joint3, pose.gripper_mount])
@@ -1457,6 +1461,9 @@ def animation_limits(
 # 7. DRAWING
 # =====================================================================
 
+BASE_RADIUS_MM = 50.0
+
+
 def draw_robot(
     axis_view, angles: JointAngles, opening: float = 1.0,
     config: RobotConfig = CONFIG, target: Any = None,
@@ -1481,6 +1488,22 @@ def draw_robot(
 
     axis_view.plot([base.x, pose.joint1.x], [base.y, pose.joint1.y], [base.z, pose.joint1.z],
                    color="black", linewidth=5, label="fixed L0")
+    import numpy as np
+
+    radius, theta = np.meshgrid(
+        np.linspace(0.0, BASE_RADIUS_MM, 12),
+        np.linspace(0.0, 2.0 * math.pi, 64),
+    )
+    axis_view.plot_surface(
+        radius * np.cos(theta),
+        radius * np.sin(theta),
+        np.zeros_like(radius),
+        color="dimgray",
+        alpha=0.45,
+        linewidth=0,
+        shade=False,
+        label=f"base platform (R={BASE_RADIUS_MM:g} mm)",
+    )
     chain = (pose.joint1, pose.joint2, pose.joint3, pose.gripper_mount)
     axis_view.plot([p.x for p in chain], [p.y for p in chain], [p.z for p in chain],
                    color="black", linewidth=4, label="tilt links")
