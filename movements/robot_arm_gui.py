@@ -198,6 +198,7 @@ class RobotArmApp:
         self.fk_j1 = _Field(left, "Joint 1 / L1 tilt (deg)", "30.0")
         self.fk_j2 = _Field(left, "Joint 2 / L2 tilt (deg)", "-20.0")
         self.fk_j3 = _Field(left, "Joint 3 / L3 tilt (deg)", "-60.0")
+        self.fk_roll = _Field(left, "Gripper roll (deg)", "0.0")
         self.fk_open = _Field(left, "opening 0..1 (blank = default)", "1.0")
         self._row_buttons(left, ("Compute FK", self._do_fk), ("Visualize", self._fk_visualize))
 
@@ -207,9 +208,10 @@ class RobotArmApp:
             j1 = _req_float(self.fk_j1, "joint1")
             j2 = _req_float(self.fk_j2, "joint2")
             j3 = _req_float(self.fk_j3, "joint3")
+            roll = _req_float(self.fk_roll, "gripper_roll")
             opening = _opt_opening(self.fk_open)
-            p = ra.forward_kinematics(tb, j1, j2, j3, self.cfg, opening)
-            gp = ra.gripper_pose(tb, j1, j2, j3, self.cfg, opening)
+            p = ra.forward_kinematics(tb, j1, j2, j3, self.cfg, opening, roll)
+            gp = ra.gripper_pose(tb, j1, j2, j3, self.cfg, opening, roll)
         except ValueError as exc:
             self.fk_out.show(f"ERROR\n{exc}")
             return
@@ -222,6 +224,7 @@ class RobotArmApp:
             f"Joint 3         : ({gp.joint3.x:9.3f}, {gp.joint3.y:9.3f}, {gp.joint3.z:9.3f}) mm",
             f"Gripper mount   : ({gp.gripper_mount.x:9.3f}, {gp.gripper_mount.y:9.3f}, {gp.gripper_mount.z:9.3f}) mm",
             f"Spread          : {gp.spread:6.3f} deg",
+            f"Gripper roll    : {gp.gripper_roll:6.3f} deg",
         ]
         for k, tip in enumerate(gp.fingertips, 1):
             lines.append(
@@ -235,11 +238,12 @@ class RobotArmApp:
             j1 = _req_float(self.fk_j1, "joint1")
             j2 = _req_float(self.fk_j2, "joint2")
             j3 = _req_float(self.fk_j3, "joint3")
+            roll = _req_float(self.fk_roll, "gripper_roll")
             opening = _opt_opening(self.fk_open)
         except ValueError as exc:
             messagebox.showerror("DUM-E", str(exc))
             return
-        self._goto_viz_angles(ra.JointAngles(tb, j1, j2, j3), opening)
+        self._goto_viz_angles(ra.JointAngles(tb, j1, j2, j3, roll), opening)
 
     # ------------------------------------------------------------------
     # Tab 2 — Inverse Kinematics
@@ -264,6 +268,7 @@ class RobotArmApp:
         self.ik_j3.pack(side="left", fill="x", expand=True)
         row.pack(fill="x", pady=3)
         self.ik_open = _Field(left, "opening 0..1 (blank = default)", "1.0")
+        self.ik_roll = _Field(left, "Gripper roll (blank = current/0 deg)", "")
         self._row_buttons(left, ("Solve IK", self._do_ik), ("Visualize (XYZ)", self._ik_visualize))
 
     def _ik_inputs(self):
@@ -273,25 +278,36 @@ class RobotArmApp:
         j3_str = self.ik_j3.get().strip()
         j3 = ra._parse_joint3_mode(j3_str)
         opening = _opt_opening(self.ik_open)
+        roll_text = self.ik_roll.get().strip()
+        roll = (
+            float(roll_text) if roll_text
+            else (self._current_angles.gripper_roll if self._current_angles else 0.0)
+        )
         joint2_up = self.ik_mode.get() != "down"
-        return x, y, z, j3, opening, joint2_up
+        return x, y, z, j3, opening, joint2_up, roll
 
     def _do_ik(self) -> None:
         try:
-            x, y, z, j3, opening, joint2_up = self._ik_inputs()
-            a = ra.inverse_kinematics(x, y, z, joint2_up=joint2_up, config=self.cfg, opening=opening, joint3=j3)
+            x, y, z, j3, opening, joint2_up, roll = self._ik_inputs()
+            a = ra.inverse_kinematics(
+                x, y, z, joint2_up=joint2_up, config=self.cfg, opening=opening,
+                joint3=j3, gripper_roll=roll,
+            )
         except ValueError as exc:
             self.ik_out.show(f"ERROR\n{exc}")
             return
         back = ra.forward_kinematics(a.theta_base, a.joint1, a.joint2, a.joint3, self.cfg, opening)
         err = ((back.x - x) ** 2 + (back.y - y) ** 2 + (back.z - z) ** 2) ** 0.5
-        ok = ra.check_joint_limits(a.theta_base, a.joint1, a.joint2, a.joint3, self.cfg)
+        ok = ra.check_joint_limits(
+            a.theta_base, a.joint1, a.joint2, a.joint3, self.cfg, a.gripper_roll
+        )
         self.ik_out.show(
             "IK solution (grip point = object centre):\n"
             f"  theta_base = {a.theta_base:9.3f} deg\n"
             f"  joint1     = {a.joint1:9.3f} deg\n"
             f"  joint2     = {a.joint2:9.3f} deg\n"
             f"  joint3     = {a.joint3:9.3f} deg\n"
+            f"  gripper_roll = {a.gripper_roll:7.3f} deg\n"
             f"  joint2 pose: {'up' if joint2_up else 'down'}\n"
             f"  within joint limits: {'yes' if ok else 'NO - out of range'}\n"
             f"  FK(recomputed) = ({back.x:.3f}, {back.y:.3f}, {back.z:.3f}) mm\n"
@@ -300,8 +316,11 @@ class RobotArmApp:
 
     def _ik_visualize(self) -> None:
         try:
-            x, y, z, j3, opening, joint2_up = self._ik_inputs()
-            a = ra.inverse_kinematics(x, y, z, joint2_up=joint2_up, config=self.cfg, opening=opening, joint3=j3)
+            x, y, z, j3, opening, joint2_up, roll = self._ik_inputs()
+            a = ra.inverse_kinematics(
+                x, y, z, joint2_up=joint2_up, config=self.cfg, opening=opening,
+                joint3=j3, gripper_roll=roll,
+            )
         except ValueError as exc:
             messagebox.showerror("DUM-E", str(exc))
             return
@@ -394,6 +413,7 @@ class RobotArmApp:
         self.v_j1 = _Field(self.viz_ang, "Joint 1 / L1 tilt (deg)", "30.0")
         self.v_j2 = _Field(self.viz_ang, "Joint 2 / L2 tilt (deg)", "-20.0")
         self.v_j3_ang = _Field(self.viz_ang, "Joint 3 / L3 tilt (deg)", "-60.0")
+        self.v_roll_ang = _Field(self.viz_ang, "Gripper roll (deg)", "0.0")
         self.v_open_a = _Field(self.viz_ang, "opening 0..1 (blank = default)", "1.0")
 
         # Panel B: XYZ target (hidden until selected).
@@ -408,6 +428,9 @@ class RobotArmApp:
         self.v_j3.pack(side="left", fill="x", expand=True)
         row.pack(fill="x", pady=3)
         self.v_open_t = _Field(self.viz_tgt, "opening 0..1 (blank = default)", "1.0")
+        self.v_roll_t = _Field(
+            self.viz_tgt, "Gripper roll (blank = current/0 deg)", ""
+        )
         row = ttk.Frame(self.viz_tgt)
         ttk.Label(row, text="joint2 pose", width=30, anchor="w").pack(side="left")
         self.v_mode = ttk.Combobox(row, values=("up", "down"), width=10, state="readonly")
@@ -454,6 +477,7 @@ class RobotArmApp:
                 _req_float(self.v_j1, "joint1"),
                 _req_float(self.v_j2, "joint2"),
                 _req_float(self.v_j3_ang, "joint3"),
+                _req_float(self.v_roll_ang, "gripper_roll"),
             )
             opening = _opt_opening(self.v_open_a)
             return angles, None, opening
@@ -463,10 +487,16 @@ class RobotArmApp:
         j3_str = self.v_j3.get().strip()
         j3 = ra._parse_joint3_mode(j3_str)
         opening = _opt_opening(self.v_open_t)
+        roll_text = self.v_roll_t.get().strip()
+        roll = (
+            float(roll_text) if roll_text
+            else (self._current_angles.gripper_roll if self._current_angles else 0.0)
+        )
         joint2_up = self.v_mode.get() != "down"
         target = ra.CartesianPoint(x, y, z)
         angles = ra.inverse_kinematics(
-            x, y, z, joint2_up=joint2_up, config=self.cfg, opening=opening, joint3=j3
+            x, y, z, joint2_up=joint2_up, config=self.cfg, opening=opening,
+            joint3=j3, gripper_roll=roll,
         )
         return angles, target, opening
 
@@ -566,6 +596,7 @@ class RobotArmApp:
         self.v_j1.var.set(f"{angles.joint1:.3f}")
         self.v_j2.var.set(f"{angles.joint2:.3f}")
         self.v_j3_ang.var.set(f"{angles.joint3:.3f}")
+        self.v_roll_ang.var.set(f"{angles.gripper_roll:.3f}")
         self.v_open_a.var.set("" if opening is None else f"{opening:.3f}")
         self.notebook.select(self.viz_tab_index)
         self._draw(angles, target, opening)

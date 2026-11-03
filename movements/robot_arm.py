@@ -1,7 +1,7 @@
 """
-DUM-E: 4-DOF Robot Arm — Kinematics Core and 3D Visualization.
+DUM-E: 5-DOF Robot Arm — Kinematics Core and 3D Visualization.
 
-Implements the mathematical core of a 4-DOF arm plus a matplotlib 3D
+Implements the mathematical core of a 5-DOF arm plus a matplotlib 3D
 visualisation and a text CLI. A tkinter desktop UI lives in
 ``robot_arm_gui.py``. Deliberately not implemented here: Arduino, ESP32,
 serial, servos, camera, vision, speech, LLM/AI, web, databases, or advanced
@@ -18,6 +18,8 @@ around +Z but cannot tilt L0. joint1 tilts L1, joint2 tilts L2 relative
 to L1, and joint3 tilts L3 relative to L2.
 The grip point is the on-axis centroid of the three fingertips, so forward
 and inverse kinematics target the object centre.
+The fifth joint, gripper_roll, rotates the finger layout around the tool axis
+without changing the grip-point position.
 
 The radial projection is signed. A folded arm can project behind the base,
 in which case an IK solution may return a base azimuth shifted by 180 degrees.
@@ -162,6 +164,7 @@ class JointAngles:
     joint1: float           # link 1 in the radial-Z plane            [deg]
     joint2: float           # link 2 relative to link 1               [deg]
     joint3: float           # link 3 relative to link 2               [deg]
+    gripper_roll: float = 0.0  # gripper rotation about the tool axis   [deg]
 
 
 # Animation start pose: link 1 and link 2 straight up.  Note the gripper stem
@@ -190,6 +193,7 @@ class FingerGripper:
     grip_point: CartesianPoint
     opening: float
     finger_paths: Tuple[Tuple[CartesianPoint, ...], ...] = ()
+    gripper_roll: float = 0.0
 
     @property
     def wrist(self) -> CartesianPoint:
@@ -411,9 +415,11 @@ def _fk_parts(
 
 
 def _gripper_pose(
-    theta_base: float, joint1: float, joint2: float, joint3_angle: float, config: RobotConfig, opening: float | None = None
+    theta_base: float, joint1: float, joint2: float, joint3_angle: float,
+    config: RobotConfig, opening: float | None = None, gripper_roll: float = 0.0,
 ) -> FingerGripper:
     """Finger-gripper geometry for angles in RADIANS."""
+    _check_finite(gripper_roll, "gripper_roll (deg)")
     _, joint1_pos, joint2_pos, joint3_pos, gripper_mount = _fk_parts(
         theta_base, joint1, joint2, joint3_angle, config
     )
@@ -437,6 +443,11 @@ def _gripper_pose(
     u0 = _cross3(ax, ref)
     u0 = tuple(c / math.sqrt(sum(c * c for c in u0)) for c in u0)
     v0 = _cross3(ax, u0)
+    roll = math.radians(gripper_roll)
+    u0, v0 = (
+        tuple(u0[i] * math.cos(roll) + v0[i] * math.sin(roll) for i in range(3)),
+        tuple(v0[i] * math.cos(roll) - u0[i] * math.sin(roll) for i in range(3)),
+    )
 
     grip_point = CartesianPoint(
         gripper_mount.x + l_g * ax[0],
@@ -469,6 +480,7 @@ def _gripper_pose(
         grip_point=grip_point,
         opening=opening_eff,
         finger_paths=tuple(paths),
+        gripper_roll=gripper_roll,
     )
 
 
@@ -482,10 +494,13 @@ def _cross3(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> Tup
 
 
 def _fk_rad(
-    theta_base: float, joint1: float, joint2: float, joint3: float, config: RobotConfig, opening: float | None = None
+    theta_base: float, joint1: float, joint2: float, joint3: float,
+    config: RobotConfig, opening: float | None = None, gripper_roll: float = 0.0,
 ) -> CartesianPoint:
     """Forward kinematics (all angles in RADIANS): returns the GRIP POINT."""
-    return _gripper_pose(theta_base, joint1, joint2, joint3, config, opening).grip_point
+    return _gripper_pose(
+        theta_base, joint1, joint2, joint3, config, opening, gripper_roll
+    ).grip_point
 
 
 def forward_kinematics(
@@ -495,6 +510,7 @@ def forward_kinematics(
     joint3: float,
     config: RobotConfig = DEFAULT_CONFIG,
     opening: float | None = None,
+    gripper_roll: float = 0.0,
 ) -> CartesianPoint:
     """Forward kinematics: returns the GRIP POINT (fingertip centroid).
 
@@ -503,7 +519,8 @@ def forward_kinematics(
     the model (commanded wrist angle, effective forearm).
     """
     return _fk_rad(
-        _to_rad(theta_base), _to_rad(joint1), _to_rad(joint2), _to_rad(joint3), config, opening
+        _to_rad(theta_base), _to_rad(joint1), _to_rad(joint2), _to_rad(joint3),
+        config, opening, gripper_roll,
     )
 
 
@@ -514,10 +531,12 @@ def gripper_pose(
     joint3: float,
     config: RobotConfig = DEFAULT_CONFIG,
     opening: float | None = None,
+    gripper_roll: float = 0.0,
 ) -> FingerGripper:
     """Full simulated gripper geometry for a pose (all angles in degrees)."""
     return _gripper_pose(
-        _to_rad(theta_base), _to_rad(joint1), _to_rad(joint2), _to_rad(joint3), config, opening
+        _to_rad(theta_base), _to_rad(joint1), _to_rad(joint2), _to_rad(joint3),
+        config, opening, gripper_roll,
     )
 
 
@@ -528,10 +547,12 @@ def finger_tips(
     joint3: float,
     config: RobotConfig = DEFAULT_CONFIG,
     opening: float | None = None,
+    gripper_roll: float = 0.0,
 ) -> Tuple[CartesianPoint, ...]:
     """The ``gripper_fingers`` fingertip positions (degrees in, mm out)."""
     return _gripper_pose(
-        _to_rad(theta_base), _to_rad(joint1), _to_rad(joint2), _to_rad(joint3), config, opening
+        _to_rad(theta_base), _to_rad(joint1), _to_rad(joint2), _to_rad(joint3),
+        config, opening, gripper_roll,
     ).fingertips
 
 
@@ -553,7 +574,7 @@ def _reach_bounds_with_joint3(config: RobotConfig, joint3: float, opening: float
 
 def _ik_rad(
     x: float, y: float, z: float, joint2_up: bool, config: RobotConfig, 
-    joint3: float, opening: float | None = None
+    joint3: float, opening: float | None = None, gripper_roll: float = 0.0
 ) -> JointAngles:
     """Inverse kinematics core; angles in RADIANS.  Raises ``ValueError``
     for targets outside the geometric workspace or numerically invalid.
@@ -629,6 +650,7 @@ def _ik_rad(
         joint1=_wrap_angle(joint1),
         joint2=_wrap_angle(joint2),
         joint3=joint3,  # pass through the given joint3
+        gripper_roll=gripper_roll,
     )
     # Final propagation guard: never emit NaN/Inf silently.
     for angle in (joint_angles.theta_base, joint_angles.joint1, joint_angles.joint2):
@@ -645,6 +667,7 @@ def _ik_stem_world(
     config: RobotConfig,
     opening: float | None = None,
     stem_deg: float = STEM_DOWN_ANGLE_DEG,
+    gripper_roll: float = 0.0,
 ) -> JointAngles:
     """Inverse kinematics for a FIXED ABSOLUTE stem orientation.
 
@@ -722,6 +745,7 @@ def _ik_stem_world(
         joint1=_to_deg(_wrap_angle(joint1)),
         joint2=_to_deg(_wrap_angle(joint2)),
         joint3=_to_deg(_wrap_angle(joint3)),
+        gripper_roll=gripper_roll,
     )
     for angle in (
         joint_angles.theta_base,
@@ -742,6 +766,7 @@ def inverse_kinematics(
     config: RobotConfig = DEFAULT_CONFIG,
     opening: float | None = None,
     joint3: float | str = -60.0,
+    gripper_roll: float = 0.0,
 ) -> JointAngles:
     """Inverse kinematics for the GRIP POINT (degrees in, `JointAngles` out).
 
@@ -769,22 +794,30 @@ def inverse_kinematics(
         must span ``|L1 - L2| <= d <= L1 + L2`` after the stem offset is
         removed from the target.
     """
+    _check_finite(gripper_roll, "gripper_roll (deg)")
     if isinstance(joint3, str):
         mode = joint3.strip().lower()
         if mode == "auto":
-            return _inverse_kinematics_auto_joint3(x, y, z, joint2_up, config, opening)
+            return _inverse_kinematics_auto_joint3(
+                x, y, z, joint2_up, config, opening, gripper_roll
+            )
         if mode == "down":
-            return _ik_stem_world(x, y, z, joint2_up, config, opening)
+            return _ik_stem_world(
+                x, y, z, joint2_up, config, opening, gripper_roll=gripper_roll
+            )
         raise ValueError(
             f"Unknown joint3 mode {joint3!r}; expected a number in degrees, "
             f'"auto", or "down".'
         )
-    angles_rad = _ik_rad(x, y, z, joint2_up, config, math.radians(joint3), opening)
+    angles_rad = _ik_rad(
+        x, y, z, joint2_up, config, math.radians(joint3), opening, gripper_roll
+    )
     return JointAngles(
         theta_base=_to_deg(angles_rad.theta_base),
         joint1=_to_deg(angles_rad.joint1),
         joint2=_to_deg(angles_rad.joint2),
         joint3=joint3,
+        gripper_roll=angles_rad.gripper_roll,
     )
 
 
@@ -800,6 +833,7 @@ def _inverse_kinematics_auto_joint3(
     joint2_up: bool,
     config: RobotConfig,
     opening: float | None,
+    gripper_roll: float,
 ) -> JointAngles:
     """Search for a joint3 value on the requested elbow branch that makes the
     target reachable with all joints within limits.
@@ -835,7 +869,8 @@ def _inverse_kinematics_auto_joint3(
                 continue
             try:
                 angles_rad = _ik_rad(
-                    x, y, z, branch, config, math.radians(j3), opening
+                    x, y, z, branch, config, math.radians(j3), opening,
+                    gripper_roll,
                 )
             except ValueError:
                 continue
@@ -844,10 +879,11 @@ def _inverse_kinematics_auto_joint3(
                 joint1=_to_deg(angles_rad.joint1),
                 joint2=_to_deg(angles_rad.joint2),
                 joint3=j3,
+                gripper_roll=angles_rad.gripper_roll,
             )
             if check_joint_limits(
                 candidate.theta_base, candidate.joint1, candidate.joint2,
-                candidate.joint3, config
+                candidate.joint3, config, candidate.gripper_roll
             ):
                 return candidate
     
@@ -884,16 +920,21 @@ def check_joint_limits(
     joint2: float,
     joint3: float,
     config: RobotConfig = DEFAULT_CONFIG,
+    gripper_roll: float = 0.0,
 ) -> bool:
-    """Check joint limits (all angles in DEGREES): True iff every joint is
+    """Check all five commanded joint limits (angles in DEGREES): True iff every joint is
     within its configured range (inclusive).  Independent of the IK math -
     validates whether the PHYSICAL arm could achieve a geometric solution.
     """
+    if isinstance(config, (int, float)):
+        gripper_roll = float(config)
+        config = DEFAULT_CONFIG
     angles = {
         "base": theta_base,
         "joint1": joint1,
         "joint2": joint2,
         "joint3": joint3,
+        "gripper_roll": gripper_roll,
     }
     for joint, value in angles.items():
         if not math.isfinite(value):
@@ -910,15 +951,21 @@ def requires_joint_limits(
     joint2: float,
     joint3: float,
     config: RobotConfig = DEFAULT_CONFIG,
+    gripper_roll: float = 0.0,
 ) -> JointAngles:
     """Like check_joint_limits but raises ValueError when out of range."""
-    if not check_joint_limits(theta_base, joint1, joint2, joint3, config):
+    if isinstance(config, (int, float)):
+        gripper_roll = float(config)
+        config = DEFAULT_CONFIG
+    if not check_joint_limits(
+        theta_base, joint1, joint2, joint3, config, gripper_roll
+    ):
         detail = {j: f"[{lo}, {hi}]" for j, (lo, hi) in config.joint_limits.items()}
         raise ValueError(
             f"Joint angles out of configured limits "
-            f"({theta_base},{joint1},{joint2},{joint3}) deg; limits = {detail}."
+            f"({theta_base},{joint1},{joint2},{joint3},{gripper_roll}) deg; limits = {detail}."
         )
-    return JointAngles(theta_base, joint1, joint2, joint3)
+    return JointAngles(theta_base, joint1, joint2, joint3, gripper_roll)
 
 
 # =====================================================================
@@ -1062,11 +1109,17 @@ def _plot_points_for_pose(
     target: CartesianPoint | None,
 ) -> list:
     """The key plotted points of one pose (links, wrist, grip, fingertips, target)."""
-    a_rad = JointAngles(_to_rad(angles.theta_base), _to_rad(angles.joint1), _to_rad(angles.joint2), _to_rad(angles.joint3))
+    a_rad = JointAngles(
+        _to_rad(angles.theta_base), _to_rad(angles.joint1), _to_rad(angles.joint2),
+        _to_rad(angles.joint3), angles.gripper_roll,
+    )
     base, joint1_pos, joint2_pos, joint3, gripper_mount = _fk_parts(
         a_rad.theta_base, a_rad.joint1, a_rad.joint2, a_rad.joint3, config
     )
-    gripper = _gripper_pose(a_rad.theta_base, a_rad.joint1, a_rad.joint2, a_rad.joint3, config, opening)
+    gripper = _gripper_pose(
+        a_rad.theta_base, a_rad.joint1, a_rad.joint2, a_rad.joint3,
+        config, opening, angles.gripper_roll,
+    )
     points = [base, joint1_pos, joint2_pos, joint3, gripper_mount, gripper.grip_point]
     points += list(gripper.fingertips)
     for path in gripper.finger_paths:
@@ -1147,11 +1200,17 @@ def draw_robot(
     ``plot_points``.
     """
     ax.clear()
-    a_rad = JointAngles(_to_rad(angles.theta_base), _to_rad(angles.joint1), _to_rad(angles.joint2), _to_rad(angles.joint3))
+    a_rad = JointAngles(
+        _to_rad(angles.theta_base), _to_rad(angles.joint1), _to_rad(angles.joint2),
+        _to_rad(angles.joint3), angles.gripper_roll,
+    )
     base, joint1_pos, joint2_pos, joint3, gripper_mount = _fk_parts(
         a_rad.theta_base, a_rad.joint1, a_rad.joint2, a_rad.joint3, config
     )
-    gripper = _gripper_pose(a_rad.theta_base, a_rad.joint1, a_rad.joint2, a_rad.joint3, config, opening)
+    gripper = _gripper_pose(
+        a_rad.theta_base, a_rad.joint1, a_rad.joint2, a_rad.joint3,
+        config, opening, angles.gripper_roll,
+    )
 
     # World axes from the base origin (RGB = X, Y, Z).
     m, _ = _grip_parameters(config, opening)
@@ -1292,6 +1351,7 @@ def interpolate_joints(
     if frames < 2:
         raise ValueError(f"frames must be >= 2, got {frames}.")
     base_delta = math.degrees(_wrap_angle(math.radians(to_angles.theta_base - from_angles.theta_base)))
+    roll_delta = math.degrees(_wrap_angle(math.radians(to_angles.gripper_roll - from_angles.gripper_roll)))
     j1_delta = to_angles.joint1 - from_angles.joint1
     j2_delta = to_angles.joint2 - from_angles.joint2
     j3_delta = to_angles.joint3 - from_angles.joint3
@@ -1301,18 +1361,22 @@ def interpolate_joints(
         t = k / (frames - 1)
         ease = t * t * (3.0 - 2.0 * t)  # smoothstep ease-in-out
         base = from_angles.theta_base + base_delta * ease
+        roll = from_angles.gripper_roll + roll_delta * ease
         if 0 < k < frames - 1:
             # Keep intermediate poses in (-180, 180] so the label/limits stay
             # canonical; the ±180 seam is visually continuous (arm is periodic).
             base = math.degrees(_wrap_angle(math.radians(base)))
+            roll = math.degrees(_wrap_angle(math.radians(roll)))
         elif k == frames - 1:
             base = to_angles.theta_base  # exact endpoint (unwrapped equals it mod 360)
+            roll = to_angles.gripper_roll
         poses.append(
             JointAngles(
                 base,
                 from_angles.joint1 + j1_delta * ease,
                 from_angles.joint2 + j2_delta * ease,
                 from_angles.joint3 + j3_delta * ease,
+                roll,
             )
         )
     return tuple(poses)
@@ -1405,19 +1469,20 @@ class RobotArm:
 
     def forward_kinematics(
         self, theta_base: float, joint1: float, joint2: float, joint3: float,
-        opening: float | None = None,
+        opening: float | None = None, gripper_roll: float = 0.0,
     ) -> CartesianPoint:
         return forward_kinematics(
-            theta_base, joint1, joint2, joint3, self.config, opening
+            theta_base, joint1, joint2, joint3, self.config, opening, gripper_roll
         )
 
     def inverse_kinematics(
         self, x: float, y: float, z: float, joint2_up: bool = True,
         opening: float | None = None, joint3: float | str = -60.0,
+        gripper_roll: float = 0.0,
     ) -> JointAngles:
         return inverse_kinematics(
             x, y, z, joint2_up=joint2_up, config=self.config,
-            opening=opening, joint3=joint3,
+            opening=opening, joint3=joint3, gripper_roll=gripper_roll,
         )
 
     def is_reachable(
@@ -1430,17 +1495,18 @@ class RobotArm:
 
     def check_joint_limits(
         self, theta_base: float, joint1: float, joint2: float, joint3: float,
+        gripper_roll: float = 0.0,
     ) -> bool:
         return check_joint_limits(
-            theta_base, joint1, joint2, joint3, self.config
+            theta_base, joint1, joint2, joint3, self.config, gripper_roll
         )
 
     def gripper_pose(
         self, theta_base: float, joint1: float, joint2: float, joint3: float,
-        opening: float | None = None,
+        opening: float | None = None, gripper_roll: float = 0.0,
     ) -> FingerGripper:
         return gripper_pose(
-            theta_base, joint1, joint2, joint3, self.config, opening
+            theta_base, joint1, joint2, joint3, self.config, opening, gripper_roll
         )
 
     def plot(self, angles: JointAngles, target: CartesianPoint | None = None, opening=None) -> None:
@@ -1470,7 +1536,8 @@ def _prompt_angles() -> JointAngles:
     ts = _prompt_float("  joint1         (deg): ")
     te = _prompt_float("  joint2         (deg): ")
     tj = _prompt_float("  joint3         (deg): ")
-    return JointAngles(tb, ts, te, tj)
+    roll = _prompt_float("  gripper_roll   (deg): ")
+    return JointAngles(tb, ts, te, tj, roll)
 
 
 def _prompt_xyz() -> CartesianPoint:
@@ -1524,8 +1591,8 @@ def _parse_joint3_mode(raw: str) -> float | str:
         )
 
 
-def _prompt_ik_target(config: RobotConfig):
-    """Shared options 2/5/7 block: target XYZ + elbow mode + opening + joint3 -> IK.
+def _prompt_ik_target(config: RobotConfig, current_roll: float = 0.0):
+    """Shared options 2/5/7 block: target XYZ + elbow mode + opening + joint3 + roll -> IK.
 
     Returns ``(p, joint2_up, opening, angles)`` or ``None`` when the input
     is rejected (an ERROR/note was already printed).
@@ -1538,6 +1605,14 @@ def _prompt_ik_target(config: RobotConfig):
     except ValueError as exc:
         print(f"\n  ERROR: {exc}")
         return None
+    roll_raw = input(
+        f"  gripper_roll (deg, default {current_roll:g}, Enter = current): "
+    ).strip()
+    try:
+        gripper_roll = current_roll if roll_raw == "" else float(roll_raw)
+    except ValueError:
+        print(f"\n  ERROR: invalid gripper_roll {roll_raw!r}; enter degrees.")
+        return None
     opening = _prompt_opening(config)
 
     # Reachability can only be pre-checked once joint3 is a concrete angle.
@@ -1548,7 +1623,8 @@ def _prompt_ik_target(config: RobotConfig):
         return None
     try:
         a = inverse_kinematics(
-            p.x, p.y, p.z, joint2_up=joint2_up, config=config, opening=opening, joint3=joint3
+            p.x, p.y, p.z, joint2_up=joint2_up, config=config, opening=opening,
+            joint3=joint3, gripper_roll=gripper_roll,
         )
     except ValueError as exc:
         print(f"\n  ERROR: {exc}")
@@ -1558,7 +1634,7 @@ def _prompt_ik_target(config: RobotConfig):
 
 MENU = """
 ================================
-       DUM-E 4-DOF ROBOT
+       DUM-E 5-DOF ROBOT
 ================================
 
 1. Forward Kinematics
@@ -1584,14 +1660,20 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
         if choice == "1":  # Forward Kinematics
             a = _prompt_angles()
             opening = _prompt_opening(config)
-            p = forward_kinematics(a.theta_base, a.joint1, a.joint2, config, opening)
+            p = forward_kinematics(
+                a.theta_base, a.joint1, a.joint2, a.joint3,
+                config=config, opening=opening, gripper_roll=a.gripper_roll,
+            )
             last_angles = a
             last_opening = config.gripper_opening if opening is None else opening
             print(
                 f"\n  Grip point: x={p.x:.3f} mm, y={p.y:.3f} mm, z={p.z:.3f} mm  "
                 f"(opening {config.gripper_opening if opening is None else opening:.3f})"
             )
-            gp = gripper_pose(a.theta_base, a.joint1, a.joint2, config, opening)
+            gp = gripper_pose(
+                a.theta_base, a.joint1, a.joint2, a.joint3,
+                config=config, opening=opening, gripper_roll=a.gripper_roll,
+            )
             for k, tip in enumerate(gp.fingertips):
                 print(
                     f"  Finger {k + 1} tip: x={tip.x:.3f} mm, y={tip.y:.3f} mm, "
@@ -1599,16 +1681,19 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
                 )
 
         elif choice == "2":  # Inverse Kinematics
-            got = _prompt_ik_target(config)
+            got = _prompt_ik_target(config, last_angles.gripper_roll)
             if got is None:
                 continue
             _, joint2_up, _, a = got
-            hits = check_joint_limits(a.theta_base, a.joint1, a.joint2, a.joint3, config)
+            hits = check_joint_limits(
+                a.theta_base, a.joint1, a.joint2, a.joint3, config, a.gripper_roll
+            )
             print(
                 f"\n  theta_base={a.theta_base:8.3f} deg\n"
                 f"  joint1={a.joint1:8.3f} deg\n"
                 f"  joint2={a.joint2:8.3f} deg\n"
-                f"  joint3={a.joint3:8.3f} deg"
+                f"  joint3={a.joint3:8.3f} deg\n"
+                f"  gripper_roll={a.gripper_roll:8.3f} deg"
             )
             print(f"  within joint limits: {'yes' if hits else 'NO — out of range'}")
 
@@ -1626,20 +1711,23 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
             opening = _prompt_opening(config)
             p = forward_kinematics(a.theta_base, a.joint1, a.joint2, a.joint3, config, opening)
             print(f"\n  Grip point: x={p.x:.3f} mm, y={p.y:.3f} mm, z={p.z:.3f} mm")
-            if not check_joint_limits(a.theta_base, a.joint1, a.joint2, a.joint3, config):
+            if not check_joint_limits(
+                a.theta_base, a.joint1, a.joint2, a.joint3, config, a.gripper_roll
+            ):
                 print("  NOTE: angles exceed configured joint limits.")
             last_angles = a
             last_opening = config.gripper_opening if opening is None else opening
             plot_robot(a, config=config, opening=opening)
 
         elif choice == "5":  # Visualize From XYZ Target
-            got = _prompt_ik_target(config)
+            got = _prompt_ik_target(config, last_angles.gripper_roll)
             if got is None:
                 continue
             p, joint2_up, opening, a = got
             print(
                 f"\n  IK result: base={a.theta_base:.3f}, joint1={a.joint1:.3f}, "
-                f"joint2={a.joint2:.3f}, joint3={a.joint3:.3f} (deg)"
+                f"joint2={a.joint2:.3f}, joint3={a.joint3:.3f}, "
+                f"gripper_roll={a.gripper_roll:.3f} (deg)"
             )
             rebuilt = forward_kinematics(
                 a.theta_base, a.joint1, a.joint2, a.joint3, config, opening
@@ -1647,7 +1735,9 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
             print(
                 f"  FK(recomputed): x={rebuilt.x:.3f}, y={rebuilt.y:.3f}, z={rebuilt.z:.3f} mm"
             )
-            if not check_joint_limits(a.theta_base, a.joint1, a.joint2, a.joint3, config):
+            if not check_joint_limits(
+                a.theta_base, a.joint1, a.joint2, a.joint3, config, a.gripper_roll
+            ):
                 print("  NOTE: solution exceeds configured joint limits.")
             last_angles = a
             last_opening = config.gripper_opening if opening is None else opening
@@ -1658,7 +1748,7 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
             verify_fk_ik(config=config, opening=opening)
 
         elif choice == "7":  # Animate To Target
-            got = _prompt_ik_target(config)
+            got = _prompt_ik_target(config, last_angles.gripper_roll)
             if got is None:
                 continue
             p, _, opening, a = got
@@ -1666,7 +1756,7 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
             frames = _prompt_frames()
             poses_same = all(
                 abs(getattr(last_angles, f) - getattr(a, f)) < 1e-3
-                for f in ("theta_base", "joint1", "joint2", "joint3")
+                for f in ("theta_base", "joint1", "joint2", "joint3", "gripper_roll")
             )
             if poses_same and abs(last_opening - target_opening) < 1e-6:
                 print("\n  NOTE: start and target poses are identical - nothing to animate.")
@@ -1674,13 +1764,17 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
             print(
                 f"\n  Animating transition:"
                 f"\n    start  base={last_angles.theta_base:8.3f}  "
-                f"joint1={last_angles.joint1:8.3f}  joint2={last_angles.joint2:8.3f}  joint3={last_angles.joint3:8.3f} deg"
+                f"joint1={last_angles.joint1:8.3f}  joint2={last_angles.joint2:8.3f}  "
+                f"joint3={last_angles.joint3:8.3f}  roll={last_angles.gripper_roll:8.3f} deg"
                 f"  opening={last_opening:.3f}"
                 f"\n    target base={a.theta_base:8.3f}  "
-                f"joint1={a.joint1:8.3f}  joint2={a.joint2:8.3f}  joint3={a.joint3:8.3f} deg"
+                f"joint1={a.joint1:8.3f}  joint2={a.joint2:8.3f}  "
+                f"joint3={a.joint3:8.3f}  roll={a.gripper_roll:8.3f} deg"
                 f"  opening={target_opening:.3f}"
             )
-            if not check_joint_limits(a.theta_base, a.joint1, a.joint2, a.joint3, config):
+            if not check_joint_limits(
+                a.theta_base, a.joint1, a.joint2, a.joint3, config, a.gripper_roll
+            ):
                 print("  NOTE: target pose exceeds configured joint limits.")
             plot_animation(
                 last_angles, a, config=config, opening=opening, target=p, frames=frames,

@@ -12,7 +12,10 @@ COMMAND_FILE = BASE_DIR / "robot_command.json"
 STATE_FILE = BASE_DIR / "robot_state.json"
 PROMPT_FILE = BASE_DIR / "system_prompt.txt"
 
-DEFAULT_STATE = {"base": 90, "joint1": 90, "joint2": -60, "joint3": -60, "gripper": 50}
+DEFAULT_STATE = {
+    "base": 90, "joint1": 90, "joint2": -60, "joint3": -60,
+    "gripper_roll": 0, "gripper": 50,
+}
 ALL_JOINTS = tuple(DEFAULT_STATE)
 JOINT_RANGES = {**JOINT_LIMITS, "gripper": (0, 100)}
 
@@ -106,7 +109,12 @@ MIDDLE_BARE_FILLER = frozenset({
 })
 RAISE_VERB = re.compile(r"\b(?:raise|lift|elevate|ascend)\b", re.IGNORECASE)
 LOWER_VERB = re.compile(r"\b(?:lower|drop|descend|sink)\b", re.IGNORECASE)
-EXPLICIT_TARGET = re.compile(r"\b(joint\s*[123]|j1|j2|j3|base|gripper|fingers?|hand|first|second|third|1st|2nd|3rd)\b[^.\n\d-]{0,20}(-?\d+)\b", re.IGNORECASE)
+EXPLICIT_TARGET = re.compile(
+    r"\b(gripper\s+roll|tool\s+roll|roll|joint\s*[123]|j1|j2|j3|base|"
+    r"gripper|fingers?|hand|first|second|third|1st|2nd|3rd)\b"
+    r"[^.\n\d-]{0,20}(-?\d+)\b",
+    re.IGNORECASE,
+)
 STOP_PHRASES = frozenset({
     "hold still", "stay still", "keep still", "freeze", "do not move",
     "don't move", "stop", "stop now", "stop moving", "emergency stop",
@@ -146,6 +154,9 @@ CONTROL_NEGATED = re.compile(
     r"\b(?:don'?t|do not|never|no need to)\s+(?:\w+\s+){0,2}home\b", re.IGNORECASE
 )
 JOINT_ALIASES = {
+    "gripper roll": "gripper_roll",
+    "tool roll": "gripper_roll",
+    "roll": "gripper_roll",
     "fingers": "gripper",
     "finger": "gripper",
     "hand": "gripper",

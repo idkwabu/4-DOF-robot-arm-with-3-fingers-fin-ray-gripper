@@ -1,0 +1,233 @@
+DUM-E ROBOT ARM: FORWARD AND INVERSE KINEMATICS
+================================================
+
+This note explains the FK and IK used by movements/robot_arm.py. Lengths are
+in millimetres. The public functions accept angles in degrees; the equations
+below use radians for trigonometric functions.
+
+
+1. ROBOT GEOMETRY AND ANGLES
+----------------------------
+
+The arm has a fixed vertical base column, four arm-joint angles, and one
+gripper-roll angle:
+
+  L0 = 100 mm     fixed height from world origin to the shoulder pivot
+  L1 = 400 mm     upper arm
+  L2 = 300 mm     forearm
+  L3 = 250 mm     wrist stem
+  Lf = 150 mm     length of each curved gripper finger
+
+  theta_base      rotation about world +Z
+  joint1          shoulder angle from horizontal in the arm's vertical plane
+  joint2          elbow angle relative to link L1
+  joint3          wrist angle relative to link L2
+  gripper_roll    gripper rotation about the tool axis
+
+Positive joint1 raises the arm. With all relative angles added, the direction
+of the wrist stem is joint1 + joint2 + joint3. The base angle rotates the
+resulting radial position around the vertical axis.
+
+The three fingers are modelled as rigid arcs curled by 60 degrees. Their
+centerline arc radius, base-ring radius, and closed grip depth are:
+
+  curl      = 60 degrees = pi/3 radians
+  R_arc     = Lf / curl = 143.239 mm
+  R_base    = R_arc * (1 - cos(curl)) = 71.620 mm
+  l_g       = R_arc * sin(curl) = 124.049 mm
+
+The FK/IK target is the grasp centre on the tool axis, not the wrist or the
+gripper mount. The opening swings the rigid fingers but does not change l_g,
+so changing the opening does not move the grasp centre or alter reachability.
+
+The stem and the grasp-depth extension combine into one tool-axis length:
+
+  A = L3 + l_g = 374.049 mm
+
+The fifth joint, gripper_roll, rotates the three-finger layout around the
+tool axis without changing the gripper mount, tool axis, or grasp-centre
+position. If u0 and v0 are perpendicular unit vectors spanning the plane
+normal to the tool axis, a roll phi rotates that basis as:
+
+  u = cos(phi)*u0 + sin(phi)*v0
+  v = cos(phi)*v0 - sin(phi)*u0
+
+Finger locations use this rotated basis. Therefore roll changes finger
+orientation and tip positions, but not the position-only FK equations below.
+
+
+2. FORWARD KINEMATICS (JOINT ANGLES TO POSITION)
+------------------------------------------------
+
+Convert the three arm-joint angles to radians and define:
+
+  t1  = joint1
+  t12 = joint1 + joint2
+  t123 = joint1 + joint2 + joint3
+
+In the arm's radial/vertical plane, the signed radial coordinate and height
+of the grasp centre are:
+
+  r = L1*cos(t1) + L2*cos(t12) + A*cos(t123)
+  z = L0 + L1*sin(t1) + L2*sin(t12) + A*sin(t123)
+
+The base yaw turns that radial coordinate into world X and Y:
+
+  x = r*cos(theta_base)
+  y = r*sin(theta_base)
+
+Therefore, FK is a direct sum of the three moving vectors L1, L2, and A,
+followed by the fixed height offset L0 and base rotation. No iteration is
+needed.
+
+The radial coordinate r is signed. If the arm folds so its radial projection
+points behind the base, r can be negative. An IK solution may represent the
+same point with a base angle shifted by 180 degrees, so IK is not guaranteed
+to recover the exact original angles of every folded pose.
+
+Worked example:
+
+  theta_base = 45 degrees
+  joint1     = 30 degrees
+  joint2     = -30 degrees
+  joint3     = -30 degrees
+
+Here t1=30 degrees, t12=0 degrees, and t123=-30 degrees:
+
+  r = 400*cos(30) + 300*cos(0) + 374.049*cos(-30)
+    = 970.346 mm
+
+  z = 100 + 400*sin(30) + 300*sin(0) + 374.049*sin(-30)
+    = 112.975 mm
+
+  x = 970.346*cos(45) = 686.138 mm
+  y = 970.346*sin(45) = 686.138 mm
+
+So the grasp-centre position is approximately (686.138, 686.138, 112.975) mm.
+
+
+3. EFFECTIVE FOREARM
+--------------------
+
+For IK with a specified joint3, combine L2 and the rigid tool-axis extension A
+as two vectors in the radial/vertical plane. In complex-number notation:
+
+  L2 + A*exp(i*joint3) = m*exp(i*delta)
+
+Equivalently:
+
+  u = L2 + A*cos(joint3)
+  v =     A*sin(joint3)
+  m = sqrt(u*u + v*v)
+  delta = atan2(v, u)
+
+The original three-vector chain can now be treated as a two-link arm of
+lengths L1 and m. Its effective second-link direction is:
+
+  joint1 + joint2 + delta
+
+The wrist angle changes m and delta, so reach depends on joint3. For example,
+at joint3=-60 degrees:
+
+  m     = 584.917 mm
+  delta = -33.629 degrees
+
+The opening does not appear in these equations because the grasp depth l_g is
+constant.
+
+
+4. INVERSE KINEMATICS (POSITION TO JOINT ANGLES)
+------------------------------------------------
+
+Given a target grasp point (x,y,z) and a specified joint3:
+
+Step 1: Find the base direction and reduce the target to a radial/height plane.
+
+  theta_base = atan2(y, x)
+  rho        = sqrt(x*x + y*y)
+  h          = z - L0
+  d          = sqrt(rho*rho + h*h)
+
+Here d is measured from the shoulder pivot at (0,0,L0), not from the world
+origin.
+
+Step 2: Check geometric reach for the chosen joint3.
+
+  abs(L1 - m) <= d <= L1 + m
+
+If this is false, that wrist angle cannot reach the target. Joint limits are a
+separate check from geometric reach.
+
+Step 3: Use the law of cosines to find the effective elbow angle:
+
+  cos(alpha) = (d*d - L1*L1 - m*m) / (2*L1*m)
+  alpha      = acos(clamp(cos(alpha), -1, 1))
+
+The effective elbow angle is joint2 + delta. Since cosine has two symmetric
+solutions, the arm has two elbow configurations.
+
+Step 4: Find the target bearing and the triangle angle at the shoulder:
+
+  psi   = atan2(h, rho)
+  gamma = acos(clamp((L1*L1 + d*d - m*m) / (2*L1*d), -1, 1))
+
+Step 5: Select the elbow branch and remove the effective offset delta:
+
+  joint2-up:
+    joint1 = psi + gamma
+    joint2 = -alpha - delta
+
+  joint2-down:
+    joint1 = psi - gamma
+    joint2 = +alpha - delta
+
+Both branches reach the same target geometrically. They can differ in whether
+they satisfy the configured joint limits.
+
+The expressions passed to acos are clamped to [-1,1] to handle tiny floating
+point errors at workspace boundaries. The solver rejects targets outside the
+reach interval and targets essentially coincident with the shoulder pivot,
+where the triangle direction is undefined.
+
+
+5. EXAMPLE IK ROUND TRIP
+------------------------
+
+For target (686.138, 686.138, 112.975) mm with joint3=-30 degrees, IK returns
+the original pose on the up branch (to rounding precision):
+
+  theta_base = 45 degrees
+  joint1     = 30 degrees
+  joint2     = -30 degrees
+  joint3     = -30 degrees
+
+Substituting these angles into the FK equations returns the same target.
+The down branch is a different valid geometric configuration; it is not
+required to reproduce the input pose.
+
+
+6. WRIST OPTIONS AND JOINT LIMITS
+---------------------------------
+
+The general IK solves for a numeric joint3 supplied by the caller and carries
+the requested gripper_roll into the returned pose. Position-only IK cannot
+determine roll because roll does not change the grasp-centre coordinates; the
+caller supplies it, defaulting to 0 degrees when omitted. The
+"auto" mode tries wrist angles and looks for a reachable solution that also
+fits the configured limits. The special "down" mode instead fixes the
+absolute tool-axis direction to vertical down (joint1 + joint2 + joint3 =
+-90 degrees), subtracts that known tool vector from the target, and solves
+the remaining L1/L2 two-link problem.
+
+The configured angle ranges are:
+
+  theta_base: -180 to 180 degrees
+  joint1:      -90 to 90 degrees
+  joint2:     -150 to 150 degrees
+  joint3:     -120 to 120 degrees
+  gripper_roll: -180 to 180 degrees
+
+FK evaluates a pose without applying these limits. Numeric-joint3 IK
+determines geometric solutions; callers can use the joint-limit check to
+determine whether a solution is physically allowed. The automatic wrist
+selection filters for solutions within the configured ranges.

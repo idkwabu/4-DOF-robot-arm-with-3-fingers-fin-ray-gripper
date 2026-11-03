@@ -70,14 +70,18 @@ PROMPT_FILE = MIND_DIR / "system_prompt.txt"
 # 1. THE ANGLE CONTRACT
 # =====================================================================
 
-DEFAULT_STATE = {"base": 90, "joint1": 90, "joint2": -60, "joint3": -60, "gripper": 50}
+DEFAULT_STATE = {
+    "base": 90, "joint1": 90, "joint2": -60, "joint3": -60,
+    "gripper_roll": 0, "gripper": 50,
+}
 ALL_JOINTS = tuple(DEFAULT_STATE)
 JOINT_RANGES = {**JOINT_LIMITS, "gripper": (0, 100)}
 VERTICAL_JOINTS = ("joint1", "joint2", "joint3")
 # JointAngles field name -> the key it has in JOINT_RANGES.  Only the base yaw
 # is spelled differently, because the dataclass inherited the old name.
 ANGLE_JOINTS = (("theta_base", "base"), ("joint1", "joint1"),
-                ("joint2", "joint2"), ("joint3", "joint3"))
+                ("joint2", "joint2"), ("joint3", "joint3"),
+                ("gripper_roll", "gripper_roll"))
 
 DIRECTION_PRESETS = {
     "up": {"joint1": 60, "joint2": -30, "joint3": 0},
@@ -876,6 +880,7 @@ class JointAngles:
     joint1: float
     joint2: float
     joint3: float
+    gripper_roll: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -896,11 +901,13 @@ class GripperPose:
     # Each rigid finger's centreline from base to tip, so the claw can be drawn
     # as a curve; `fingertips` is the last point of each path.
     finger_paths: tuple[tuple[CartesianPoint, ...], ...] = ()
+    gripper_roll: float = 0.0
 
 
 CONFIG = RobotConfig()
 HOME_ANGLES = JointAngles(DEFAULT_STATE["base"], DEFAULT_STATE["joint1"],
-                          DEFAULT_STATE["joint2"], DEFAULT_STATE["joint3"])
+                          DEFAULT_STATE["joint2"], DEFAULT_STATE["joint3"],
+                          DEFAULT_STATE["gripper_roll"])
 POSITION_TOLERANCE_MM = 0.5
 # Boundary slack on the geometric reach test, and the radius below which the
 # law of cosines runs into a degenerate triangle.
@@ -941,7 +948,8 @@ def _require_limits(angles: JointAngles, config: RobotConfig = CONFIG) -> None:
         raise ValueError(
             "The solution leaves a joint outside its range: "
             f"base {angles.theta_base:.2f}, joint1 {angles.joint1:.2f}, "
-            f"joint2 {angles.joint2:.2f}, joint3 {angles.joint3:.2f}."
+            f"joint2 {angles.joint2:.2f}, joint3 {angles.joint3:.2f}, "
+            f"gripper_roll {angles.gripper_roll:.2f}."
         )
 
 
@@ -1075,6 +1083,11 @@ def gripper_pose(
     helper = CartesianPoint(0.0, 0.0, 1.0) if abs(axis.z) < 0.999 else CartesianPoint(1.0, 0.0, 0.0)
     first = _unit(_cross(axis, helper))
     second = _cross(axis, first)
+    roll = math.radians(angles.gripper_roll)
+    first, second = (
+        _add(_scale(first, math.cos(roll)), _scale(second, math.sin(roll))),
+        _add(_scale(second, math.cos(roll)), _scale(first, -math.sin(roll))),
+    )
     tips: list[CartesianPoint] = []
     paths: list[tuple[CartesianPoint, ...]] = []
     for index in range(config.finger_count):
@@ -1094,6 +1107,7 @@ def gripper_pose(
         spread=spread,
         fingertips=tuple(tips),
         finger_paths=tuple(paths),
+        gripper_roll=angles.gripper_roll,
     )
 
 
@@ -1156,7 +1170,7 @@ def _solve_plane(
 
 def _ik_once(
     radial: float, height: float, joint3: float, opening: float,
-    config: RobotConfig, joint2_up: bool,
+    config: RobotConfig, joint2_up: bool, gripper_roll: float = 0.0,
 ) -> JointAngles:
     """One exact solve for a given wrist angle.  Raises when unreachable."""
     forearm, delta = _forearm(joint3, opening, config)
@@ -1177,12 +1191,14 @@ def _ik_once(
         _wrap_deg(math.degrees(joint1)),
         _wrap_deg(math.degrees(effective - delta)),
         _wrap_deg(math.degrees(joint3)),
+        gripper_roll,
     )
 
 
 def _ik_stem_world(
     x: float, y: float, z: float, joint2_up: bool, opening: float,
     config: RobotConfig, stem_deg: float = STEM_DOWN_ANGLE_DEG,
+    gripper_roll: float = 0.0,
 ) -> JointAngles:
     """Solve IK for a FIXED ABSOLUTE stem orientation, returning degrees.
 
@@ -1237,6 +1253,7 @@ def _ik_stem_world(
         _wrap_deg(math.degrees(joint1)),
         _wrap_deg(math.degrees(joint2)),
         _wrap_deg(math.degrees(joint3)),
+        gripper_roll,
     )
 
 
@@ -1244,6 +1261,7 @@ def inverse_kinematics(
     x: float, y: float, z: float, joint2_up: bool = True,
     joint3: float | str = "auto", opening: float = 1.0,
     config: RobotConfig = CONFIG,
+    gripper_roll: float = 0.0,
 ) -> JointAngles:
     """Solve for the joint angles that put the grip point on (x, y, z).
 
@@ -1275,7 +1293,10 @@ def inverse_kinematics(
             last = ""
             for up in (joint2_up, not joint2_up):
                 try:
-                    pose = _ik_stem_world(x, y, z, up, opening, config)
+                    pose = _ik_stem_world(
+                        x, y, z, up, opening, config,
+                        gripper_roll=gripper_roll,
+                    )
                 except ValueError as exc:
                     last = str(exc)
                     continue
@@ -1304,12 +1325,14 @@ def inverse_kinematics(
         for wrist in wrists:
             try:
                 angles = _ik_once(
-                    radial, height, wrist, opening, config, branch
+                    radial, height, wrist, opening, config, branch, gripper_roll
                 )
             except ValueError as exc:
                 last = str(exc)
                 continue
-            angles = JointAngles(yaw, angles.joint1, angles.joint2, angles.joint3)
+            angles = JointAngles(
+                yaw, angles.joint1, angles.joint2, angles.joint3, gripper_roll
+            )
             if check_joint_limits(angles, config):
                 return angles
 
@@ -1380,6 +1403,7 @@ def interpolate_joints(
 ) -> tuple[JointAngles, ...]:
     if frames < 2:
         raise ValueError("Animation must contain at least two frames.")
+    roll_delta = _wrap_deg(end.gripper_roll - start.gripper_roll)
     out: list[JointAngles] = []
     for index in range(frames):
         t = index / (frames - 1)
@@ -1390,6 +1414,7 @@ def interpolate_joints(
                 start.joint1 + (end.joint1 - start.joint1) * eased,
                 start.joint2 + (end.joint2 - start.joint2) * eased,
                 start.joint3 + (end.joint3 - start.joint3) * eased,
+                _wrap_deg(start.gripper_roll + roll_delta * eased),
             )
         )
     out[0] = start
@@ -1634,10 +1659,11 @@ JOINT3_CHOICES = ("auto", "down") + tuple(str(v) for v in range(-60, 151, 5))
 
 
 def state_to_angles(state: dict) -> JointAngles:
-    """The four arm angles in a remembered pose; the gripper rides separately."""
+    """The four arm angles and gripper roll; opening is stored separately."""
     return JointAngles(
         float(state["base"]), float(state["joint1"]),
         float(state["joint2"]), float(state["joint3"]),
+        float(state["gripper_roll"]),
     )
 
 
@@ -1686,11 +1712,12 @@ class DumEApp:
 
     # -- shared layout ------------------------------------------------
     def _angles_row(self, parent, prefix: str, base="45.0", j1="30.0",
-                    j2="-20.0", j3="-60.0", opening="1.0") -> None:
+                    j2="-20.0", j3="-60.0", roll="0.0", opening="1.0") -> None:
         setattr(self, f"{prefix}_base", _Field(parent, "Base yaw / spin (deg)", base))
         setattr(self, f"{prefix}_j1", _Field(parent, "Joint 1 / L1 tilt (deg)", j1))
         setattr(self, f"{prefix}_j2", _Field(parent, "Joint 2 / L2 tilt (deg)", j2))
         setattr(self, f"{prefix}_j3", _Field(parent, "Joint 3 / L3 tilt (deg)", j3))
+        setattr(self, f"{prefix}_roll", _Field(parent, "Gripper roll (deg)", roll))
         setattr(self, f"{prefix}_open",
                 _Field(parent, "opening 0..1 (blank = default)", opening))
 
@@ -1700,6 +1727,7 @@ class DumEApp:
             _req_float(getattr(self, f"{prefix}_j1"), "joint1"),
             _req_float(getattr(self, f"{prefix}_j2"), "joint2"),
             _req_float(getattr(self, f"{prefix}_j3"), "joint3"),
+            _req_float(getattr(self, f"{prefix}_roll"), "gripper_roll"),
         )
         if not check_joint_limits(angles, self.cfg):
             lo, hi = JOINT_RANGES["base"]
@@ -1757,6 +1785,9 @@ class DumEApp:
         self.v_tgt_j3.pack(side="left", fill="x", expand=True)
         row.pack(fill="x", pady=3)
         self.v_open_t = _Field(self.viz_tgt, "opening 0..1 (blank = default)", "1.0")
+        self.v_roll_t = _Field(
+            self.viz_tgt, "gripper roll (blank = current/0 deg)", ""
+        )
         row = ttk.Frame(self.viz_tgt)
         ttk.Label(row, text="joint2 pose", width=30, anchor="w").pack(side="left")
         self.v_mode = ttk.Combobox(row, values=("up", "down"), width=10, state="readonly")
@@ -1856,6 +1887,7 @@ class DumEApp:
             "joint1": self._angles.joint1,
             "joint2": self._angles.joint2,
             "joint3": self._angles.joint3,
+            "gripper_roll": self._angles.gripper_roll,
             "gripper": 100.0 * self._opening,
         }
         save_pose_state(pose)
@@ -1989,9 +2021,15 @@ class DumEApp:
         raw_j3 = self.v_tgt_j3.get().strip()
         j3 = raw_j3 if raw_j3 in ("auto", "down") else float(raw_j3)
         opening = _opt_opening(self.v_open_t)
+        roll_text = self.v_roll_t.get().strip()
+        roll = (
+            float(roll_text) if roll_text
+            else (self._angles.gripper_roll if self._angles is not None else 0.0)
+        )
         target = CartesianPoint(x, y, z)
         angles = inverse_kinematics(x, y, z, joint2_up=self.v_mode.get() != "down",
-                                    config=self.cfg, opening=opening, joint3=j3)
+                                    config=self.cfg, opening=opening, joint3=j3,
+                                    gripper_roll=roll)
         return angles, target, opening
 
     def _do_viz_plot(self) -> None:

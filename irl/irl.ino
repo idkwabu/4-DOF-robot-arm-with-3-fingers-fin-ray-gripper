@@ -2,8 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-const uint8_t SERVO_PINS[5] = {3, 5, 6, 9, 10};
-const uint8_t SERVO_COUNT = 5;
+const uint8_t SERVO_PINS[6] = {3, 5, 6, 9, 10, 11};
+const uint8_t SERVO_COUNT = 6;
 
 Servo servos[SERVO_COUNT];
 char inputLine[40];

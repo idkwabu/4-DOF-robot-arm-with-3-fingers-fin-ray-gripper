@@ -1,4 +1,4 @@
-"""Stream robot_state.json poses to a five-servo Arduino controller."""
+"""Stream robot_state.json poses to a six-servo Arduino controller."""
 
 import argparse
 import json
@@ -14,7 +14,7 @@ JOINT_RANGES = {
     **JOINT_LIMITS,
     "gripper": (0.0, 100.0),
 }
-JOINTS = ("base", "joint1", "joint2", "joint3", "gripper")
+JOINTS = ("base", "joint1", "joint2", "joint3", "gripper_roll", "gripper")
 DEFAULT_STATE_FILE = Path(__file__).resolve().parent / "robot_state.json"
 
 
@@ -28,7 +28,7 @@ def load_servo_positions(path: Path) -> tuple[int, ...]:
 
     positions = []
     for joint in JOINTS:
-        value = state.get(joint)
+        value = state.get(joint, 0 if joint == "gripper_roll" else None)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"{path}: {joint} must be a number.")
         minimum, maximum = JOINT_RANGES[joint]
@@ -47,7 +47,7 @@ def state_signature(path: Path) -> tuple[int, int]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Watch robot_state.json and send five servo positions over serial."
+        description="Watch robot_state.json and send six servo positions over serial."
     )
     parser.add_argument("--port", required=True, help="Arduino serial port (for example COM3)")
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_FILE)

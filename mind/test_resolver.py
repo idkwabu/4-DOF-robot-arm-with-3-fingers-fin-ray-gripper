@@ -16,6 +16,13 @@ CHECKS = 0
 def check(label, actual, expected):
     global CHECKS
     CHECKS += 1
+    if (
+        isinstance(actual, dict)
+        and set(actual) == set(mind.COMMAND_KEYS)
+        and isinstance(expected, dict)
+        and "gripper_roll" not in expected
+    ):
+        expected = {**expected, "gripper_roll": None}
     if actual != expected:
         FAILURES.append(f"{label}\n     expected: {expected}\n     actual:   {actual}")
 
@@ -40,7 +47,9 @@ EXPECTED_PRESETS = {
     "up-middle": {"base": 90, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None},
     "down-middle": {"base": 90, "joint1": 60, "joint2": -90, "joint3": -60, "gripper": None},
 }
-ANGLE_KEYS = ("base", "joint1", "joint2", "joint3", "gripper")
+for _preset in EXPECTED_PRESETS.values():
+    _preset["gripper_roll"] = None
+ANGLE_KEYS = ("base", "joint1", "joint2", "joint3", "gripper_roll", "gripper")
 
 
 def angles(command):
@@ -72,7 +81,7 @@ def test_all_nineteen_intents():
     check("nineteen canonical intents", len(cases), 19)
     for action, direction in cases:
         command = mind.resolve_command(action, direction)
-        check(f"{action}/{direction} has 7 fields", sorted(command), sorted(mind.COMMAND_KEYS))
+        check(f"{action}/{direction} has 8 fields", sorted(command), sorted(mind.COMMAND_KEYS))
         if action == "move" and direction == "default":
             check_true("a bare move/default is a no-op and invalid", not mind.is_valid_command(command))
             continue
@@ -84,7 +93,10 @@ def test_all_nineteen_intents():
         elif action == "turn" and direction == "default":
             check("turn middle points base at 90", angles(command)["base"], 90)
         if action == "turn":
-            check_true(f"turn/{direction} keeps every joint null", all(command[j] is None for j in VERTICAL + ("gripper",)))
+            check_true(
+                f"turn/{direction} keeps every joint null",
+                all(command[j] is None for j in VERTICAL + ("gripper_roll", "gripper")),
+            )
         if action == "tilt":
             check(f"tilt/{direction} leaves base alone", command["base"], None)
 
@@ -96,7 +108,8 @@ def test_no_op_is_rejected():
 def test_overrides_win_over_presets():
     command = mind.resolve_command("move", "left", {"base": 45, "gripper": 100})
     check("explicit base overrides the left preset", angles(command),
-          {"base": 45, "joint1": None, "joint2": None, "joint3": None, "gripper": 100})
+          {"base": 45, "joint1": None, "joint2": None, "joint3": None,
+           "gripper_roll": None, "gripper": 100})
     check_true("overridden left is still valid", mind.is_valid_command(command))
     check("turn plus a vertical joint becomes move", mind.coerce_action("turn", {"joint2": 30}), "move")
     check("turn without a vertical joint stays turn", mind.coerce_action("turn", {"base": 10}), "turn")
@@ -300,7 +313,7 @@ def test_bare_middle():
     check("bare middle touches only the base",
           [key for key in ANGLE_KEYS if command[key] is not None], ["base"])
     check("bare middle sends no joint angles", [command[key] for key in ANGLE_KEYS[1:]],
-          [None, None, None, None])
+          [None, None, None, None, None])
     check_true("bare middle is a valid turn", mind.is_valid_command(command))
     check("bare middle is not a no-op", mind.is_valid_command(
         mind.resolve_command("turn", "default")), True)
@@ -414,20 +427,20 @@ def test_state_handling():
         original = mind.STATE_FILE
         mind.STATE_FILE = Path(tmp) / "robot_state.json"
         try:
-            mind._write_json(mind.STATE_FILE, {"base": 45, "joint1": 45, "joint2": 30, "joint3": 30, "gripper": 25})
-            check("state loads", mind.load_state(), {"base": 45, "joint1": 45, "joint2": 30, "joint3": 30, "gripper": 25})
+            mind._write_json(mind.STATE_FILE, {"base": 45, "joint1": 45, "joint2": 30, "joint3": 30, "gripper_roll": 0, "gripper": 25})
+            check("state loads", mind.load_state(), {"base": 45, "joint1": 45, "joint2": 30, "joint3": 30, "gripper_roll": 0, "gripper": 25})
 
             mind.save_state(mind.resolve_command("turn", "left"))
-            check("turn left only moves the base", mind.load_state(), {"base": 135, "joint1": 45, "joint2": 30, "joint3": 30, "gripper": 25})
+            check("turn left only moves the base", mind.load_state(), {"base": 135, "joint1": 45, "joint2": 30, "joint3": 30, "gripper_roll": 0, "gripper": 25})
 
             mind.save_state(mind.resolve_command("tilt", "up"))
-            check("tilt up keeps the base and gripper", mind.load_state(), {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": 25})
+            check("tilt up keeps the base and gripper", mind.load_state(), {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper_roll": 0, "gripper": 25})
 
             mind.save_state(mind.resolve_command("move", "default", {"gripper": 100}))
-            check("a gripper move leaves the angles alone", mind.load_state(), {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": 100})
+            check("a gripper move leaves the angles alone", mind.load_state(), {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper_roll": 0, "gripper": 100})
 
             mind.save_state(mind.resolve_command("stop"))
-            check("stop never moves the arm", mind.load_state(), {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": 100})
+            check("stop never moves the arm", mind.load_state(), {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper_roll": 0, "gripper": 100})
 
             mind.save_state(mind.resolve_command("home"))
             check("home resets everything", mind.load_state(), dict(mind.DEFAULT_STATE))
@@ -440,11 +453,11 @@ def test_state_handling():
 
             mind._write_json(mind.STATE_FILE, {"base": 135, "joint1": "high", "joint2": 30, "joint3": -90, "gripper": 25})
             check("one bad joint does not erase the rest of the pose", mind.load_state(),
-                  {"base": 135, "joint1": 90, "joint2": 30, "joint3": -90, "gripper": 25})
+                  {"base": 135, "joint1": 90, "joint2": 30, "joint3": -90, "gripper_roll": 0, "gripper": 25})
 
             mind._write_json(mind.STATE_FILE, {"base": 0, "joint2": 45})
             check("absent keys default one joint at a time", mind.load_state(),
-                  {"base": 0, "joint1": 90, "joint2": 45, "joint3": -60, "gripper": 50})
+                  {"base": 0, "joint1": 90, "joint2": 45, "joint3": -60, "gripper_roll": 0, "gripper": 50})
 
             mind.STATE_FILE.write_text("[1, 2, 3]", encoding="utf-8")
             check("a state file that is not an object falls back to defaults", mind.load_state(), dict(mind.DEFAULT_STATE))
@@ -461,7 +474,7 @@ def test_state_handling():
         finally:
             mind.STATE_FILE = original
 
-    shipped = json.loads(mind.STATE_FILE.read_text(encoding="utf-8"))
+    shipped = mind.load_state()
     check_true("the shipped robot_state.json has no nulls",
                set(shipped) == set(mind.ALL_JOINTS) and all(v is not None for v in shipped.values()))
     check_true("every shipped angle is a real in range number",
@@ -513,7 +526,8 @@ def test_the_first_state_is_never_null():
             mind.save_state({"action": "move", "direction": "default", "base": None,
                              "joint1": None, "joint2": 9999, "joint3": None, "gripper": None})
             check("nulls and out of range angles are refused", mind.load_state(),
-                  {"base": 90, "joint1": 90, "joint2": -60, "joint3": -60, "gripper": 50})
+                  {"base": 90, "joint1": 90, "joint2": -60, "joint3": -60,
+                   "gripper_roll": 0, "gripper": 50})
         finally:
             mind.STATE_FILE = original
 
@@ -529,7 +543,9 @@ def test_state_survives_a_realistic_session():
                 command = mind.build_local_command(prompt)
                 check_true(f"session command is valid: {prompt!r}", command is not None and mind.is_valid_command(command))
                 mind.save_state(command)
-            check("the arm never loses a joint to null", mind.load_state(), {"base": 45, "joint1": 60, "joint2": -90, "joint3": -60, "gripper": 100})
+            check("the arm never loses a joint to null", mind.load_state(),
+                  {"base": 45, "joint1": 60, "joint2": -90, "joint3": -60,
+                   "gripper_roll": 0, "gripper": 100})
             check("every state value is a real number", all(mind._in_range(mind.load_state()[j], *mind.JOINT_RANGES[j]) for j in mind.ALL_JOINTS), True)
         finally:
             mind.STATE_FILE = original
@@ -566,7 +582,7 @@ def test_command_file_never_holds_a_null():
             check("an untouched joint keeps the remembered angle",
                   json.loads(mind.COMMAND_FILE.read_text(encoding="utf-8")),
                   {"action": "turn", "direction": "left", "base": 135, "joint1": 30,
-                   "joint2": 45, "joint3": -75, "gripper": 20})
+                   "joint2": 45, "joint3": -75, "gripper_roll": 0, "gripper": 20})
         finally:
             mind.STATE_FILE, mind.COMMAND_FILE = original_state, original_command
 
@@ -589,7 +605,7 @@ def test_the_first_command_starts_from_home():
             check("the first command inherits home for the joints it omits",
                   json.loads(mind.COMMAND_FILE.read_text(encoding="utf-8")),
                   {"action": "turn", "direction": "right", "base": 45, "joint1": 90,
-                   "joint2": -60, "joint3": -60, "gripper": 50})
+                   "joint2": -60, "joint3": -60, "gripper_roll": 0, "gripper": 50})
             # a corrupt memory still yields a complete pose, never a null
             mind._write_json(mind.STATE_FILE, "{not json at all")
             mind.save_command(mind.resolve_command("move", "up"))
@@ -694,6 +710,18 @@ def test_novel_control_phrasings():
         if command is not None:
             check_true(f"novel phrasing is not stolen by a control word: {prompt!r}",
                        command["action"] not in ("home", "status", "help"))
+
+
+def test_gripper_roll_commands_are_validated_and_remembered():
+    command = mind.build_local_command("set gripper roll to 135")
+    check_true("gripper roll command is parsed locally", command is not None)
+    if command is not None:
+        check("roll override", command["gripper_roll"], 135)
+        check_true("roll command has the move action", command["action"] == "move")
+        check_true("roll command schema is valid", mind.is_valid_command(command))
+
+    invalid = mind.resolve_command("move", "default", {"gripper_roll": 180.001})
+    check_true("out-of-range roll command is invalid", not mind.is_valid_command(invalid))
 
 
 def main():

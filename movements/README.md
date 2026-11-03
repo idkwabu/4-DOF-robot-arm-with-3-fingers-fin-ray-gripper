@@ -1,10 +1,10 @@
-# DUM-E — 4-DOF Robot Arm Kinematics Core
+# DUM-E — 5-DOF Robot Arm Kinematics Core
 
-A single-file mathematics + visualization layer for a 4-DOF robot arm
+A single-file mathematics + visualization layer for a 5-DOF robot arm
 (`Base → fixed L0 → joint1/L1 → joint2/L2 → joint3/wrist mount → L3 →
 gripper mount → Fingers`). The model is a fixed vertical `L0 = 100 mm` base
 link, a `400 mm` L1 upper link, a `300 mm` L2 forearm, and a `250 mm` L3 wrist
-stem. **The four DOF are `theta_base`, `joint1`, `joint2` and `joint3`** — `joint3`
+stem. **The four arm joints are `theta_base`, `joint1`, `joint2` and `joint3`** — `joint3`
 is the wrist and is a real, commandable joint (`±120°`, default `-60°`), *not* a
 fixed kink. The `WRIST_STEM_ANGLE = -60°` config field is a legacy value used by
 `_grip_parameters` for reporting; live FK/IK use the `joint3` you pass in. L0 cannot
@@ -17,6 +17,11 @@ end-effector that FK/IK/reachability use. The opening (`GRIPPER_OPENING`, 0 =
 closed with the tips meeting on the axis, 1 = fully open) only **swings** each
 rigid finger about its base: it never bends the finger and never moves the grip
 point.
+
+The fifth commanded joint, `gripper_roll` (`−180°..180°`, default `0°`), rotates the
+finger layout around the tool axis. It changes finger locations and is included in
+joint-limit checks and shortest-path pose interpolation, but does not move the grip
+point or change position-only IK. IK preserves a supplied roll (default `0°`).
 
 > **Reach envelope:** the envelope depends on `joint3`, because the effective
 > forearm `m` is measured from `L2` along a direction set by that joint. It does
@@ -90,7 +95,7 @@ Draw the arm at `base yaw=30°, joint1/L1=45°, joint2/L2=-40°`:
 
 ```
 ================================
-       DUM-E 4-DOF ROBOT
+       DUM-E 5-DOF ROBOT
 ================================
 
 1. Forward Kinematics
@@ -148,8 +153,8 @@ down.joint1 + down.joint2 + down.joint3                            # -> -9.0
 ra.is_reachable(686.138, 686.138, 112.975)  # bool
 ra.check_joint_limits(30.0, 45.0, -40.0, -60.0)   # bool
 
-# Interactive 3D visualization (JointAngles takes four fields)
-ra.plot_robot(ra.JointAngles(30.0, 45.0, -40.0, -60.0),
+# Interactive 3D visualization (four arm joints plus gripper roll)
+ra.plot_robot(ra.JointAngles(30.0, 45.0, -40.0, -60.0, 30.0),
               target=ra.CartesianPoint(686.138, 686.138, 112.975))
 
 # Smooth joint-space transition between two poses
@@ -165,7 +170,7 @@ ra.verify_fk_ik(n_samples=50)
 
 ### Class-based usage
 
-`RobotArm` binds a `RobotConfig` and exposes the same four-joint operations without
+`RobotArm` binds a `RobotConfig` and exposes the same five-joint operations without
 requiring `config` on every call. `joint3` is required for FK, gripper geometry, and
 joint-limit checks; reachability and IK default to `joint3=-60°`.
 
@@ -178,7 +183,8 @@ pose = arm.gripper_pose(30.0, 45.0, -40.0, -60.0, opening=0.5)
 angles = arm.inverse_kinematics(grip.x, grip.y, grip.z, joint3="auto")
 reachable = arm.is_reachable(grip.x, grip.y, grip.z, joint3=-60.0)
 within_limits = arm.check_joint_limits(
-    angles.theta_base, angles.joint1, angles.joint2, angles.joint3
+    angles.theta_base, angles.joint1, angles.joint2, angles.joint3,
+    gripper_roll=angles.gripper_roll,
 )
 ```
 
@@ -199,9 +205,9 @@ From the project folder:
 python robot_arm.py
 ```
 
-The menu appears. **Option `1` — Forward Kinematics** asks for four joint
-angles in degrees (then an optional gripper opening) and returns the **grip
-point** plus every fingertip:
+The menu appears. **Option `1` — Forward Kinematics** asks for the four arm-joint
+angles and `gripper_roll` in degrees (then an optional gripper opening) and returns
+the **grip point** plus every fingertip:
 
 ```
 Select option: 1
@@ -209,6 +215,7 @@ Select option: 1
   joint1         (deg): 30
   joint2         (deg): -20
   joint3         (deg): -60
+  gripper_roll   (deg): 0
   gripper opening 0..1 (default 1, Enter = default):
 
   Grip point: x=546.603 mm, y=546.603 mm, z=195.784 mm  (opening 1.000)
@@ -394,10 +401,11 @@ Notes:
 **Option `7`** solves IK for a target (as in options `2`/`5`) and then plays
 a *smooth animation* in joint space from the **last pose you drew** to that
 target pose. Interpolation uses an ease-in/out curve (accelerate, cruise,
-decelerate) and, for `theta_base`, the shortest angular path — so
+decelerate) and the shortest angular path for `theta_base` and `gripper_roll` — so
 `170° → -170°` sweeps through `180°`, not through `0°`. The gripper opening
 rides the same curve, so the fingers open/close *during* the move instead of
-snapping to the target opening on the first frame.
+snapping to the target opening on the first frame. Roll moves the finger layout
+around the tool axis without changing the grip-point position.
 
 ```
 Select option: 7
@@ -773,6 +781,7 @@ JOINT_LIMITS = {
     "joint1":   (-90.0, 90.0),    # shoulder from horizontal outward; + rises
     "joint2":   (-150.0, 150.0),   # relative link-2 angle
     "joint3":   (-120.0, 120.0),   # wrist angle relative to the forearm
+    "gripper_roll": (-180.0, 180.0), # gripper rotation about the tool axis
 }
 ```
 
@@ -842,8 +851,9 @@ Visualization tab, whose toolbar lets you rotate/zoom the 3D view.
 **Smooth transitions** add one more drawing mode:
 
 - `interpolate_joints(from, to, frames=60)` — pure Python, returns the eased
-  joint-space poses (`from` == first, `to` == last, `theta_base` via the
-  shortest angular path). Reusable anywhere (a controller, the GUI, tests).
+  joint-space poses (`from` == first, `to` == last, `theta_base` and
+  `gripper_roll` via their shortest angular paths). Reusable anywhere (a
+  controller, the GUI, tests).
 - `interpolate_opening(from_opening, to_opening, frames=60)` — the grip
   opening on the *same* ease curve, one value per frame, so the fingers move
   in step with the joints. Pass the same `frames` as `interpolate_joints`.
@@ -909,7 +919,7 @@ It is pure mathematics + a 3D plot: no Arduino, no servos, no hardware. It is
 the *brain* that a future controller would call. Everything lives in
 `robot_arm.py` (math core + CLI), with `robot_arm_gui.py` (tkinter UI) on top.
 
-### 12.2 The physical model — four joints, three links, one stem, three fingers
+### 12.2 The physical model — four arm joints, gripper roll, three links, one stem, three fingers
 
 ```
 Base ──(L0=100 mm fixed)── joint1 ──(L1=400 mm)── joint2 ──(L2=300 mm)── wrist mount
@@ -939,9 +949,9 @@ Base ──(L0=100 mm fixed)── joint1 ──(L1=400 mm)── joint2 ──(
   (`gripper_mount`, on the axis) to each finger base on that `R_base` ring, so the claw
   reads as attached to the arm. It is drawn only — it adds no joint and no kinematics.
 
-**So the arm has exactly 4 degrees of freedom**: 4 angles (base, joint1, joint2, joint3) fully determine
-every point (joint1, joint2, joint3, gripper mount, fingertips, object centre). The fingers
-have no motors and never change the reach — their open/close is a *tool setting*, not a
+**The robot has 5 commanded degrees of freedom**: base, joint1, joint2, joint3, and
+gripper roll. These determine every point on the arm and gripper. The fingers have
+no motors and never change the reach — their open/close is a *tool setting*, not a
 degree of freedom — but it is still animated: during a transition the opening eases
 alongside the joints (see §4.4 and `interpolate_opening`).
 
@@ -1100,8 +1110,8 @@ and calls the same `draw_robot` the CLI uses.
 | Type | Fields | Notes |
 | --- | --- | --- |
 | `CartesianPoint` | `x`, `y`, `z` (mm) | plus `.coords() → (x, y, z)` |
-| `JointAngles` | `theta_base`, `joint1`, `joint2`, `joint3` (deg) | the output of IK |
-| `FingerGripper` | `joint1`, `joint2`, `joint3`, `gripper_mount`, `axis`, `spread`, `fingertips`, `grip_point`, `opening`, `finger_paths` | produced by `gripper_pose()` |
+| `JointAngles` | `theta_base`, `joint1`, `joint2`, `joint3`, `gripper_roll` (deg) | the output of IK |
+| `FingerGripper` | `joint1`, `joint2`, `joint3`, `gripper_mount`, `axis`, `spread`, `fingertips`, `grip_point`, `opening`, `finger_paths`, `gripper_roll` | produced by `gripper_pose()` |
 | `RobotConfig` | `l0`, `l1`, `l2`, `l3`, `wrist_stem_angle`, `gripper_fingers`, `finger_length`, `finger_opening_deg`, `finger_curl_deg`, `gripper_opening`, `joint_limits` | one object = one arm |
 
 **Module functions** (all take `config: RobotConfig = DEFAULT_CONFIG` and,
@@ -1109,13 +1119,13 @@ where noted, an optional `opening`):
 
 | Function | Signature | Returns |
 | --- | --- | --- |
-| `forward_kinematics` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None)` | grip point `CartesianPoint` |
-| `gripper_pose` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None)` | full `FingerGripper` geometry |
-| `finger_tips` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None)` | `tuple` of 3 `CartesianPoint` |
-| `inverse_kinematics` | `(x, y, z, joint2_up=True, config=DEFAULT_CONFIG, opening=None, joint3=-60.0)` | `JointAngles` (deg); `joint3` may be `"auto"` or `"down"` |
+| `forward_kinematics` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None, gripper_roll=0.0)` | grip point `CartesianPoint`; roll does not change XYZ |
+| `gripper_pose` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None, gripper_roll=0.0)` | full `FingerGripper` geometry |
+| `finger_tips` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, opening=None, gripper_roll=0.0)` | `tuple` of 3 `CartesianPoint` |
+| `inverse_kinematics` | `(x, y, z, joint2_up=True, config=DEFAULT_CONFIG, opening=None, joint3=-60.0, gripper_roll=0.0)` | `JointAngles` (deg); preserves requested roll; `joint3` may be `"auto"` or `"down"` |
 | `is_reachable` | `(x, y, z, config=DEFAULT_CONFIG, joint3=-60.0, opening=None)` | `bool` (geometric) |
-| `check_joint_limits` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG)` | `bool` (physical) |
-| `requires_joint_limits` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG)` | `JointAngles` or raises `ValueError` |
+| `check_joint_limits` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, gripper_roll=0.0)` | `bool` (physical) |
+| `requires_joint_limits` | `(theta_base, joint1, joint2, joint3, config=DEFAULT_CONFIG, gripper_roll=0.0)` | `JointAngles` or raises `ValueError` |
 | `verify_fk_ik` | `(n_samples=20, opening=None)` | `(max_pos_err, passed, total)` |
 | `draw_robot` | `(ax, angles, target=None, opening=None, fixed_limits=None)` | draws into a 3D `Axes` |
 | `plot_robot` | `(angles, target=None, opening=None)` | opens its own window |
@@ -1125,22 +1135,16 @@ where noted, an optional `opening`):
 | `plot_animation` | `(from_angles, to_angles, target=None, opening=None, frames=60, interval=30, from_opening=None)` | animates in its own window; ramps the grip when `from_opening` is given |
 | `cli` / `main` | — | the text menu |
 
-**`RobotArm` facade** — a convenience class bound to one config. **Its kinematic methods
-are currently broken** (see the facade note in §3 for which ones); the module-level
-functions are the supported path:
+**`RobotArm` facade** — a convenience class bound to one config; its kinematic
+methods expose the same joint3 and roll parameters as the module-level functions:
 
 ```text
 arm = ra.RobotArm()                      # default 400/300/250 arm
 arm.l1, arm.l2, arm.l3, arm.stem_angle   # read-only geometry
 arm.inverse_kinematics(686.138, 686.138, 112.975, joint2_up=True, joint3=-30.0)   # works
+arm.forward_kinematics(45.0, 30.0, -30.0, -30.0, gripper_roll=90.0)
 arm.plot(angles, target=p)               # works
 arm.verify(n_samples=50)                 # works
-
-# these four raise TypeError as shipped — they omit joint3:
-#   arm.forward_kinematics(theta_base, joint1, joint2, opening=None)
-#   arm.gripper_pose(theta_base, joint1, joint2, opening=None)
-#   arm.check_joint_limits(theta_base, joint1, joint2)
-#   arm.is_reachable(x, y, z, opening=None)
 ```
 
 ### 12.13 Configuration and derived values (default arm)
@@ -1159,7 +1163,7 @@ Configurable (one block at the top of `robot_arm.py`):
 | `FINGER_OPENING_DEG` | 30° | max swing of a finger off the tool axis |
 | `FINGER_CURL_DEG` | 60° | fixed inward curl of the rigid finger |
 | `GRIPPER_OPENING` | 1.0 | default opening (0 closed .. 1 open) |
-| `JOINT_LIMITS` | base ±180°, j1 ±90°, j2 ±150°, j3 ±120° | shared ranges from `robot_contract.py` |
+| `JOINT_LIMITS` | base ±180°, j1 ±90°, j2 ±150°, j3 ±120°, roll ±180° | shared ranges from `robot_contract.py` |
 | `POSITION_TOLERANCE_MM` | 0.1 | verification position bar |
 | `REACH_EPSILON_MM` / `MIN_D_SHARE_LIMIT` | 1e-9 | numerical slack/guards |
 
@@ -1212,8 +1216,9 @@ wrist limit, leaving a 56.93 mm inner bound there.
 
 ### 12.15 Glossary
 
-- **DOF** — degree of freedom; an independently controllable joint (here: 4 - `theta_base`, `joint1`, `joint2`,
-`joint3`). The gripper opening is *not* a DOF; it is a tool parameter that only
+- **DOF** — degree of freedom; an independently controllable joint (here: 5 -
+  `theta_base`, `joint1`, `joint2`, `joint3`, `gripper_roll`). The gripper opening
+  is *not* a DOF; it is a tool parameter that only
 swings the rigid fingers and does **not** change the reach — though its motion is
 still eased during an animation.
 - **FK / IK** — forward / inverse kinematics.

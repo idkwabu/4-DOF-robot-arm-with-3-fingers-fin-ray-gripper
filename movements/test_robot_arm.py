@@ -21,6 +21,7 @@ class RobotArmFacadeTests(unittest.TestCase):
                 "joint1": (-90.0, 90.0),
                 "joint2": (-150.0, 150.0),
                 "joint3": (-120.0, 120.0),
+                "gripper_roll": (-180.0, 180.0),
             },
         )
 
@@ -195,20 +196,51 @@ class RobotArmFacadeTests(unittest.TestCase):
         self.assertFalse(ra.check_joint_limits(0.0, 0.0, 0.0, 120.001))
 
     def test_joint_limit_checks_reject_non_finite_angles(self):
-        for joint_index in range(4):
+        for joint_index in range(5):
             for value in (math.nan, math.inf, -math.inf):
-                angles = [0.0] * 4
+                angles = [0.0] * 5
                 angles[joint_index] = value
                 with self.subTest(joint=joint_index, value=value):
                     self.assertFalse(ra.check_joint_limits(*angles))
                     with self.assertRaises(ValueError):
                         ra.requires_joint_limits(*angles)
 
+    def test_roll_rotates_fingers_without_moving_the_grasp_point(self):
+        angles = (35.0, 45.0, -20.0, -60.0)
+        unrolled = ra.gripper_pose(*angles, gripper_roll=0.0)
+        rolled = ra.gripper_pose(*angles, gripper_roll=90.0)
+
+        self.assertEqual(unrolled.grip_point, rolled.grip_point)
+        self.assertNotEqual(unrolled.fingertips, rolled.fingertips)
+        self.assertEqual(rolled.gripper_roll, 90.0)
+
+    def test_roll_limit_ik_preservation_and_shortest_path_interpolation(self):
+        self.assertTrue(ra.check_joint_limits(0.0, 0.0, 0.0, 0.0, gripper_roll=180.0))
+        self.assertFalse(ra.check_joint_limits(0.0, 0.0, 0.0, 0.0, gripper_roll=180.001))
+
+        target = ra.forward_kinematics(45.0, 30.0, -30.0, -30.0)
+        solved = ra.inverse_kinematics(
+            target.x, target.y, target.z, joint3=-30.0, gripper_roll=135.0
+        )
+        self.assertEqual(solved.gripper_roll, 135.0)
+        self.assertTrue(ra.check_joint_limits(
+            solved.theta_base, solved.joint1, solved.joint2, solved.joint3,
+            gripper_roll=solved.gripper_roll,
+        ))
+
+        frames = ra.interpolate_joints(
+            ra.JointAngles(0.0, 0.0, 0.0, 0.0, 170.0),
+            ra.JointAngles(0.0, 0.0, 0.0, 0.0, -170.0),
+            frames=3,
+        )
+        self.assertEqual((frames[0].gripper_roll, frames[-1].gripper_roll), (170.0, -170.0))
+        self.assertEqual(abs(frames[1].gripper_roll), 180.0)
+
 
 class RobotArmGuiTests(unittest.TestCase):
     def test_visualized_pose_updates_all_joint_angle_fields(self):
         app = RobotArmApp.__new__(RobotArmApp)
-        for name in ("v_base", "v_j1", "v_j2", "v_j3_ang", "v_open_a"):
+        for name in ("v_base", "v_j1", "v_j2", "v_j3_ang", "v_roll_ang", "v_open_a"):
             setattr(app, name, Mock())
             getattr(app, name).var = Mock()
         app.viz_mode = Mock()
@@ -222,6 +254,7 @@ class RobotArmGuiTests(unittest.TestCase):
         app._goto_viz_angles(angles, 0.5, target)
 
         app.v_j3_ang.var.set.assert_called_once_with("-45.000")
+        app.v_roll_ang.var.set.assert_called_once_with("0.000")
         app._draw.assert_called_once_with(angles, target, 0.5)
 
 

@@ -32,6 +32,7 @@ class DumERuntimeTests(unittest.TestCase):
         self.assertEqual(shared["joint1"], (-90.0, 90.0))
         self.assertEqual(shared["joint2"], (-150.0, 150.0))
         self.assertEqual(shared["joint3"], (-120.0, 120.0))
+        self.assertEqual(shared["gripper_roll"], (-180.0, 180.0))
         self.assertEqual(brain.JOINT_RANGES, {**shared, "gripper": (0, 100)})
         self.assertEqual(dume.JOINT_RANGES, {**shared, "gripper": (0, 100)})
         self.assertEqual(movement_arm.JOINT_LIMITS, shared)
@@ -64,6 +65,7 @@ class DumERuntimeTests(unittest.TestCase):
             "joint1": 60,
             "joint2": -60.25,
             "joint3": -30,
+            "gripper_roll": 135,
             "gripper": 75.5,
         }
         with tempfile.TemporaryDirectory() as directory:
@@ -97,6 +99,7 @@ class DumERuntimeTests(unittest.TestCase):
             "joint1": 45,
             "joint2": -80,
             "joint3": -35,
+            "gripper_roll": 0,
             "gripper": 25,
         }
         with tempfile.TemporaryDirectory() as directory:

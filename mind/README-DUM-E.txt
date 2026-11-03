@@ -5,7 +5,7 @@ How a request becomes a robot command
 --------------------------------------
 
     you type  ->  local parser  ->  model  ->  resolver  ->  robot_command.json
-                  (fast, exact)  (Qwen)     (angles)     (five real numbers)
+                  (fast, exact)  (Qwen)     (angles)     (six values)
 
 The model is small (Qwen3-0.6B) and does one job only: pick an action and a
 direction. It never sees or produces a number.
@@ -40,22 +40,22 @@ left" is down-left, and "raise it and turn right" is up-right.
 Direction table
 ---------------
 
-    request              action  base  joint1  joint2  joint3
-    -------------------  ------  ----  ------  ------  ------
-    turn left            turn    135   -       -       -
-    turn right           turn     45   -       -       -
-    tilt up              tilt      -   120    -60     -30
-    tilt down            tilt      -    60    -90     -60
-    move up-left         move    135   120    -60     -30
-    move up-right        move     45   120    -60     -30
-    move down-left       move    135    60    -90     -60
-    move down-right      move     45    60    -90     -60
-    turn to the middle   turn     90   -       -       -
-    middle / center      turn     90   -       -       -
-    up-middle            move     90   120    -60     -30
-    down-middle          move     90    60    -90     -60
-    home                 home     90    90    -60     -60   gripper 50
-    stop / status / help -        -      -      -       -       -
+    request              action  base  joint1  joint2  joint3  roll
+    -------------------  ------  ----  ------  ------  ------  ----
+    turn left            turn    135   -       -       -       -
+    turn right           turn     45   -       -       -       -
+    tilt up              tilt      -   120    -60     -30      -
+    tilt down            tilt      -    60    -90     -60      -
+    move up-left         move    135   120    -60     -30      -
+    move up-right        move     45   120    -60     -30      -
+    move down-left       move    135    60    -90     -60      -
+    move down-right      move     45    60    -90     -60      -
+    turn to the middle   turn     90   -       -       -       -
+    middle / center      turn     90   -       -       -       -
+    up-middle            move     90   120    -60     -30      -
+    down-middle          move     90    60    -90     -60      -
+    home                 home     90    90    -60     -60      0   gripper 50
+    stop / status / help -        -      -      -       -       -       -
 
 A plain turn swings 45 degrees off the middle, and a diagonal turns exactly as
 far as the plain turn it is named after: move up-left is not a bigger turn than
@@ -95,17 +95,18 @@ own: "lower the arm all the way to the left" is still down-left at 135, and
 robot_command.json
 -------------------
 
-The output the hardware reads. Every file holds all five angles as real
-numbers: there is no null and no dash. A joint the command did not mention
-carries the angle the arm is already holding, so the file is always the
-complete post-command pose. Nulls exist only inside the parser, where they
-mean "unchanged", and they are filled in before anything is written.
+The output the hardware reads. Every file holds the five joint angles plus
+the gripper opening as real numbers: there is no null and no dash. A joint
+the command did not mention carries the angle the arm is already holding, so
+the file is always the complete post-command pose. Nulls exist only inside
+the parser, where they mean "unchanged", and they are filled in before
+anything is written.
 
 The first pose is the home state above, so a command that names only the base
-still arrives as a full set of five angles.
+still arrives as a full set of six values.
 
 Ranges: base -180..180, shoulder/joint1 -90..90, elbow/joint2 -150..150,
-wrist/joint3 -120..120, gripper 0..100.
+wrist/joint3 -120..120, gripper_roll -180..180, gripper opening 0..100.
 
 Numbers are accepted as digits or words ("one hundred and thirty five" is
 135) and always win over the table.
@@ -114,7 +115,7 @@ Numbers are accepted as digits or words ("one hundred and thirty five" is
 robot_state.json
 ----------------
 
-Always five concrete numbers, never null: the pose Dum-E remembers, used to
+Always six concrete numbers, never null: the pose Dum-E remembers, used to
 fill in any joint a command leaves out. Only the joints a command actually
 mentions are changed, so "turn left" does not disturb the arm pose. With no
 file present the first pose is the home state.

@@ -1,6 +1,6 @@
 # DUM-E
 
-A 4-DOF robot arm with a 3-finger gripper, driven by natural-language commands and a
+A 5-DOF robot arm with a 3-finger gripper, driven by natural-language commands and a
 locally-run fine-tuned language model. No GPU required — the base model is small enough
 to run on CPU, although `device_map="auto"` will use a GPU if one happens to be present.
 
@@ -40,7 +40,7 @@ Read this section before assuming any of the above works on hardware.
 | Forward / inverse kinematics | Working in both the module-level API and the `RobotArm` facade |
 | Tkinter GUIs | Working |
 | Fine-tuned model | Working, 99.9% end-to-end — **shipped weights predate the current dataset** |
-| **Hardware / servos** | A five-servo Arduino serial controller is provided; hardware calibration is required. |
+| **Hardware / servos** | A six-servo Arduino serial controller is provided; hardware calibration is required. |
 | **"Fin-ray" gripper** | **Kinematic only.** Three rigid *curled* fingers (a circular arc of fixed curvature — no joint along a finger). No tendons, no underactuation, no compliant elements. The opening swings the whole finger and is animated, but never changes the reach. |
 | Hand / gesture recognition | Not implemented. `features_macro/hand_recognition.py` is a 0-byte placeholder. |
 
@@ -55,10 +55,11 @@ from each joint's logical range to the hobby-servo range of 0..180 degrees.
 
 ### Running the servo controller
 
-Install `pyserial`, connect five servos to Arduino pins **3, 5, 6, 9, and 10** in the order
-base, joint1, joint2, joint3, gripper, and upload `irl/irl.ino`. The sketch reads one
-comma-separated line of five servo angles (0..180) at 115200 baud, applies the full line,
-and replies `OK` or `ERR`. It attaches the servos on receipt of the first valid pose.
+Install `pyserial`, connect six servos to Arduino pins **3, 5, 6, 9, 10, and 11** in the
+order base, joint1, joint2, joint3, gripper_roll, gripper opening, and upload
+`irl/irl.ino`. The sketch reads one comma-separated line of six servo angles (0..180) at
+115200 baud, applies the full line, and replies `OK` or `ERR`. It attaches the servos on
+receipt of the first valid pose.
 
 For an Arduino Uno with Arduino CLI installed, install the AVR board core, compile, and
 upload the sketch (replace `COM3` with the board's port):
@@ -82,7 +83,8 @@ The watcher reads the root `robot_state.json` by default and sends each changed 
 default, or `--poll SECONDS` to change the 0.1-second polling interval. It validates each
 joint against its logical limits and linearly maps the whole logical range to 0..180:
 base -180..180, shoulder/joint1 -90..90, elbow/joint2 -150..150, wrist/joint3 -120..120,
-and gripper 0..100. These are
+gripper_roll -180..180, and gripper opening 0..100. Older state files without
+`gripper_roll` default it to 0°. These are
 generic mappings, not hardware calibration: adjust servo direction, neutral point, and
 mechanical travel for your specific arm before attaching linkages. Power servos from a
 suitable external supply, not the Arduino 5V pin, and connect the supply ground to Arduino
@@ -161,7 +163,7 @@ Dum-E.py     mind/mind.py          <- language layer
    |             |
    +------+------+
           |
-   joint angles (base, joint1, joint2, joint3, gripper)
+   joint angles and opening (base, joint1, joint2, joint3, gripper_roll, gripper)
           |
    mind/robot_command.json         <- the contract
           |
@@ -346,10 +348,14 @@ JOINT_RANGES = {
     "joint1": (-90, 90),
     "joint2": (-150, 150),
     "joint3": (-120, 120),
+    "gripper_roll": (-180, 180),
     "gripper": (0, 100),
 }
 
-DEFAULT_STATE = {"base": 90, "joint1": 90, "joint2": -60, "joint3": -60, "gripper": 50}
+DEFAULT_STATE = {
+    "base": 90, "joint1": 90, "joint2": -60, "joint3": -60,
+    "gripper_roll": 0, "gripper": 50,
+}
 MIDDLE_BASE = 90
 ```
 
@@ -385,12 +391,13 @@ agrees with it. Where anything still conflicts, the source is correct.
 | `FINGER_CURL_DEG` | 60° | Fixed inward curl of the rigid finger |
 | `POSITION_TOLERANCE_MM` | 0.1 mm | FK/IK agreement tolerance |
 
-### Four joints, three arm links
+### Five joints, three arm links
 
-`L0` is fixed. The four controlled angles are `theta_base`, `joint1`, `joint2`, `joint3`.
-The three movable arm links are `L1`, `L2`, `L3`. Some older notes describe this arm as
+`L0` is fixed. The five controlled angles are `theta_base`, `joint1`, `joint2`, `joint3`,
+and `gripper_roll`. The roll rotates the gripper around its tool axis without changing
+the grasp-point position. The three movable arm links are `L1`, `L2`, `L3`. Some older notes describe this arm as
 "3 DOF" because they predate `joint3`; the code and the `JointAngles` dataclass both have
-four fields.
+five fields.
 
 ### `forward_kinematics` returns the grip point
 
@@ -828,6 +835,7 @@ The remembered pose, per joint:
   "joint1": 90,
   "joint2": -60,
   "joint3": -60,
+  "gripper_roll": 0,
   "gripper": 50
 }
 ```
@@ -837,7 +845,7 @@ default alone, so one bad value never erases the whole remembered pose. A missin
 unparseable file falls back to `DEFAULT_STATE` outright.
 
 The main `Dum-E.py` GUI shares this file with `mind/mind.py` and mirrors the same
-five values to a root-level `robot_state.json` for convenient access. At startup it
+six values to a root-level `robot_state.json` for convenient access. At startup it
 initializes that mirror from `mind/robot_state.json`; later GUI pose updates write both
 files. Command mode saves resolved commands; the joint-angle and XYZ modes save their
 validated pose when plotted or when an animation completes or is stopped. The stored
