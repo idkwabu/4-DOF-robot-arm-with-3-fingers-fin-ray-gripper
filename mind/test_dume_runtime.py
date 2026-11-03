@@ -34,6 +34,13 @@ class DumERuntimeTests(unittest.TestCase):
         self.assertEqual(command["gripper_roll"], 135)
         self.assertTrue(dume.is_valid_command(command))
 
+    def test_bare_down_is_resolved_without_model_inference(self):
+        command = dume.build_local_command("down")
+
+        self.assertIsNotNone(command)
+        self.assertEqual(command["action"], "tilt")
+        self.assertEqual(command["direction"], "down")
+
     def test_roll_only_pose_change_is_detected(self):
         start = dume.JointAngles(0.0, 0.0, 0.0, 0.0, 0.0)
         rolled = dume.JointAngles(0.0, 0.0, 0.0, 0.0, 90.0)

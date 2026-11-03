@@ -107,6 +107,14 @@ MIDDLE_BARE_FILLER = frozenset({
     "turn", "go", "move", "swing", "swivel", "rotate", "spin", "point",
     "face", "steer", "pivot", "return", "just", "now", "then",
 })
+DIRECTION_BARE_FILLER = (
+    HARD_BARE_FILLER
+    | MIDDLE_BARE_FILLER
+    | frozenset({
+        "up", "upward", "above", "down", "downward", "below",
+        "left", "leftward", "right", "rightward",
+    })
+)
 RAISE_VERB = re.compile(r"\b(?:raise|lift|elevate|ascend)\b", re.IGNORECASE)
 LOWER_VERB = re.compile(r"\b(?:lower|drop|descend|sink)\b", re.IGNORECASE)
 EXPLICIT_TARGET = re.compile(
@@ -530,20 +538,6 @@ def _has_direction_verb(prompt: str) -> bool:
     return bool(MOVE_VERB.search(prompt) or TURN_VERB.search(prompt) or TILT_VERB.search(prompt))
 
 
-def _is_bare_hard_turn(prompt: str) -> bool:
-    """True when a hard turn is the whole instruction, with no turn verb.
-
-    "all the way left" names no verb, so without this it would reach the model,
-    which knows only the soft labels and would answer with a 45 degree turn.
-    Content words beyond the direction phrase mean the sentence is about
-    something else -- "as far as the left wheel goes, replace the belt" is
-    maintenance, not a command -- so that still goes to the model.
-    """
-    if not (HARD_NEAR.search(prompt) or HARD_ANYWHERE.search(prompt)):
-        return False
-    return all(word in HARD_BARE_FILLER for word in re.findall(r"[a-z]+", prompt.lower()))
-
-
 def _is_bare_middle(prompt: str) -> bool:
     """True when a middle word is the whole instruction, with no turn verb.
 
@@ -557,6 +551,12 @@ def _is_bare_middle(prompt: str) -> bool:
     if not DIRECTION_MIDDLE.search(prompt):
         return False
     return all(word in MIDDLE_BARE_FILLER for word in re.findall(r"[a-z]+", prompt.lower()))
+
+
+def _is_bare_direction(prompt: str) -> bool:
+    """Accept direction-only phrases, while deferring ordinary sentences."""
+    words = re.findall(r"[a-z]+", prompt.lower())
+    return bool(words) and all(word in DIRECTION_BARE_FILLER for word in words)
 
 
 def parse_explicit_values(prompt: str) -> dict:
@@ -641,23 +641,16 @@ def build_local_command(prompt: str) -> dict | None:
     overrides = local_overrides(prompt)
     vertical = any(joint in overrides for joint in VERTICAL_JOINTS)
 
-    # A hard turn is an instruction in its own right: "all the way left" and
-    # "hard left" name no turn verb, so without this they would fall through to
-    # the model, which only knows the soft labels and would answer with a 45
-    # degree turn.
-    bare_hard = (
+    bare_direction = (
         direction is not None
-        and direction.startswith("hard-")
-        and not overrides
-        and _is_bare_hard_turn(prompt)
+        and not _has_direction_verb(prompt)
+        and _is_bare_direction(prompt)
     )
 
-    # A middle word is an instruction in its own right in the same way: "middle",
-    # "center" and "straight ahead" name a turn without naming a turn verb, so
-    # without this they would be detected and then never dispatched.
-    bare_middle = direction in MIDDLE_DIRECTIONS and not _has_direction_verb(prompt)
-
-    if direction is not None and (_has_direction_verb(prompt) or bare_hard or bare_middle):
+    if direction is not None and (
+        _has_direction_verb(prompt)
+        or bare_direction
+    ):
         # A middle word beside a real left or right is ambiguous -- "turn left to
         # the middle" names two different targets -- so the model decides. A
         # middle word that produced the direction itself is not a conflict.
