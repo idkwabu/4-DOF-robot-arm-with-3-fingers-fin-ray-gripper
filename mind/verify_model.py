@@ -15,9 +15,6 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 sys.path.insert(0, str(Path(__file__).parent))
 import mind
 
@@ -68,6 +65,8 @@ def main() -> int:
         return 0
 
     model_rows = random.Random(5).sample(model_rows, min(MODEL_SAMPLE, len(model_rows)))
+    import torch
+
     model, tokenizer = mind._load_model()
     correct = 0
     for prompt, expected, _ in model_rows:

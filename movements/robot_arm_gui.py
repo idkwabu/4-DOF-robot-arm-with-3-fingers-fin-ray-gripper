@@ -33,8 +33,7 @@ import robot_arm as ra
 import matplotlib
 
 try:
-    matplotlib.use("TkAgg")  # must be set before importing pyplot
-    import matplotlib.pyplot as plt  # noqa: E402,F401
+    matplotlib.use("TkAgg")  # select the GUI backend before importing its canvas
     from matplotlib.backends.backend_tkagg import (  # noqa: E402
         FigureCanvasTkAgg,
         NavigationToolbar2Tk,
@@ -59,7 +58,7 @@ def _same_pose(a: ra.JointAngles, b: ra.JointAngles, tol: float = 1e-3) -> bool:
     """True when two poses are (numerically) the same joint position."""
     return all(
         abs(getattr(a, f) - getattr(b, f)) <= tol
-        for f in ("theta_base", "joint1", "joint2", "joint3")
+        for f in ("theta_base", "joint1", "joint2", "joint3", "gripper_roll")
     )
 
 

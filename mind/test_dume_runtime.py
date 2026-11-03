@@ -8,7 +8,7 @@ import threading
 import unittest
 from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 APP_PATH = Path(__file__).resolve().parents[1] / "Dum-E.py"
@@ -26,6 +26,59 @@ SPEC.loader.exec_module(dume)
 
 
 class DumERuntimeTests(unittest.TestCase):
+    def test_gui_uses_shared_parser_and_recognizes_roll_commands(self):
+        self.assertIs(dume.build_local_command, brain.build_local_command)
+        command = dume.build_local_command("set gripper roll to 135")
+
+        self.assertIsNotNone(command)
+        self.assertEqual(command["gripper_roll"], 135)
+        self.assertTrue(dume.is_valid_command(command))
+
+    def test_roll_only_pose_change_is_detected(self):
+        start = dume.JointAngles(0.0, 0.0, 0.0, 0.0, 0.0)
+        rolled = dume.JointAngles(0.0, 0.0, 0.0, 0.0, 90.0)
+
+        self.assertFalse(dume._same_pose(start, rolled))
+        self.assertTrue(dume._same_pose(start, start))
+
+    def test_mode_controls_are_packed_above_visualization(self):
+        app = dume.DumEApp.__new__(dume.DumEApp)
+        app.viz_mode = type("Mode", (), {"get": lambda self: "target"})()
+        app.cmd_frame = Mock()
+        app.viz_ang = Mock()
+        app.viz_tgt = Mock()
+        app.cmd_buttons = Mock()
+        app.viz_buttons = Mock()
+        app.viz_panes = object()
+
+        app._toggle_mode()
+
+        app.viz_tgt.pack.assert_called_once_with(
+            fill="x", pady=(6, 0), before=app.viz_panes
+        )
+        app.viz_buttons.pack.assert_called_once_with(
+            fill="x", pady=4, before=app.viz_panes
+        )
+
+    def test_joint_limit_error_reports_only_the_invalid_joint_range(self):
+        app = dume.DumEApp.__new__(dume.DumEApp)
+        app.cfg = dume.CONFIG
+        values = {
+            "base": "0",
+            "j1": "0",
+            "j2": "0",
+            "j3": "0",
+            "roll": "181",
+            "open": "1",
+        }
+        for field, value in values.items():
+            setattr(app, f"v_{field}", SimpleNamespace(get=lambda v=value: v))
+
+        with self.assertRaisesRegex(
+            ValueError, r"gripper_roll 181 is outside -180\.\.180"
+        ):
+            app._read_angles("v")
+
     def test_all_interfaces_use_the_shared_joint_limits(self):
         shared = dict(dume.JOINT_LIMITS)
         self.assertEqual(shared["base"], (-180.0, 180.0))

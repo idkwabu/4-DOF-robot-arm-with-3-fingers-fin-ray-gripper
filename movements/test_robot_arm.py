@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import Mock
 
 import robot_arm as ra
-from robot_arm_gui import RobotArmApp
+from robot_arm_gui import RobotArmApp, _same_pose
 
 
 class RobotArmFacadeTests(unittest.TestCase):
@@ -238,6 +238,13 @@ class RobotArmFacadeTests(unittest.TestCase):
 
 
 class RobotArmGuiTests(unittest.TestCase):
+    def test_roll_only_change_is_a_distinct_pose(self):
+        start = ra.JointAngles(0.0, 0.0, 0.0, 0.0, 0.0)
+        rolled = ra.JointAngles(0.0, 0.0, 0.0, 0.0, 90.0)
+
+        self.assertFalse(_same_pose(start, rolled))
+        self.assertTrue(_same_pose(start, start))
+
     def test_visualized_pose_updates_all_joint_angle_fields(self):
         app = RobotArmApp.__new__(RobotArmApp)
         for name in ("v_base", "v_j1", "v_j2", "v_j3_ang", "v_roll_ang", "v_open_a"):
