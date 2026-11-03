@@ -11,9 +11,9 @@ Everything now shares ONE angle contract, the one the trained model was fitted
 against and that ``robot_state.json`` already stores:
 
     base  -180 .. 180   yaw about +Z, 0 = +X, 90 = +Y, ±180 = -X
-    joint1   0 .. 180   link L1 in the radial-Z plane, from horizontal outward
+    joint1 -90 .. 90    shoulder angle from horizontal outward (positive rises)
     joint2 -150 .. 150   link L2 RELATIVE to L1
-    joint3 -150 .. 150   link L3 RELATIVE to L2
+    joint3 -120 .. 120   link L3 RELATIVE to L2
     gripper   0 .. 100   0 = closed, 100 = open
 
 The link chain is base -> fixed vertical L0 -> joint1 -> L1 -> joint2 -> L2
@@ -24,6 +24,10 @@ converts to the per-link absolutes the renderer needs.
 Run it with:
 
     python Dum-E.py
+
+Run the symmetrical two-finger version with:
+
+    python Dum-E-2finger.py
 
 It shares ``mind/robot_command.json`` and ``mind/robot_state.json`` with
 ``mind/mind.py``, so the CLI and this window drive the same arm and remember the
@@ -76,7 +80,7 @@ ANGLE_JOINTS = (("theta_base", "base"), ("joint1", "joint1"),
                 ("joint2", "joint2"), ("joint3", "joint3"))
 
 DIRECTION_PRESETS = {
-    "up": {"joint1": 120, "joint2": -60, "joint3": -30},
+    "up": {"joint1": 60, "joint2": -30, "joint3": 0},
     "down": {"joint1": 60, "joint2": -90, "joint3": -60},
     # A plain turn swings 45 degrees off the middle; "hard" swings the full 90
     # to the mechanical limit. Diagonals turn exactly as far as the plain turn
@@ -85,8 +89,8 @@ DIRECTION_PRESETS = {
     "right": {"base": 45},
     "hard-left": {"base": 180},
     "hard-right": {"base": 0},
-    "up-left": {"base": 135, "joint1": 120, "joint2": -60, "joint3": -30},
-    "up-right": {"base": 45, "joint1": 120, "joint2": -60, "joint3": -30},
+    "up-left": {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0},
+    "up-right": {"base": 45, "joint1": 60, "joint2": -30, "joint3": 0},
     "down-left": {"base": 135, "joint1": 60, "joint2": -90, "joint3": -60},
     "down-right": {"base": 45, "joint1": 60, "joint2": -90, "joint3": -60},
     # Centering the base on its own mechanical middle. The compound forms pair
@@ -94,7 +98,7 @@ DIRECTION_PRESETS = {
     # left base with the same tilt, so middle axes stay base-only and only the
     # compounds may move the arm.
     "middle": {"base": 90},
-    "up-middle": {"base": 90, "joint1": 120, "joint2": -60, "joint3": -30},
+    "up-middle": {"base": 90, "joint1": 60, "joint2": -30, "joint3": 0},
     "down-middle": {"base": 90, "joint1": 60, "joint2": -90, "joint3": -60},
 }
 # Which joints each direction may move, read off the presets so the two tables
@@ -116,7 +120,7 @@ COMMAND_KEYS = frozenset({"action", "direction", *ALL_JOINTS})
 L0 = 100.0
 L1 = 400.0
 L2 = 300.0
-L3 = 80.0
+L3 = 250.0
 FINGER_COUNT = 3
 FINGER_LENGTH = 150.0  # Lf: arc length of one rigid finger [mm]
 FINGER_SPREAD_DEG = 30.0
@@ -1166,7 +1170,7 @@ def _ik_once(
             f"[{lo:.1f}, {hi:.1f}] mm the arm can span with this wrist angle."
         )
     joint1, effective = _solve_plane(radial, height, forearm, config, joint2_up)
-    # An absolute direction is periodic, so a raw joint1 well outside -180..180
+    # An absolute direction is periodic, so an out-of-range raw joint1 angle
     # can still be a perfectly legal pose once it is wrapped back.
     return JointAngles(
         0.0,
@@ -2154,7 +2158,7 @@ def _new_toolbar(canvas, master) -> None:
     NavigationToolbar2Tk(canvas, master).update()
 
 
-def main() -> None:
+def main(config: RobotConfig = CONFIG) -> None:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -2169,7 +2173,7 @@ def main() -> None:
     print("Type 'help' in the Command tab for what Dum-E understands.")
 
     root = tk.Tk()
-    DumEApp(root)
+    DumEApp(root, config=config)
     root.mainloop()
 
 

@@ -45,9 +45,9 @@ from robot_contract import JOINT_LIMITS
 L0: float = 100.0
 L1: float = 400.0
 L2: float = 300.0
-L3: float = 80.0
+L3: float = 250.0
 
-# Fixed orientation of L3 relative to L2.
+# Legacy/home wrist value; live FK/IK use the commandable joint3 angle.
 WRIST_STEM_ANGLE: float = -60.0
 
 # Absolute stem orientation used by the ``joint3="down"`` IK mode: the L3 stem
@@ -88,9 +88,9 @@ GRIP_DEPTH: float = FINGER_ARC_RADIUS * math.sin(math.radians(FINGER_CURL_DEG))
 # arm is built.  Ranges are inclusive on both ends.
 #
 #   base:     (-180, 180)    full servo yaw range.
-#   joint1:   (0, 180)       link-1 angle in the radial-Z plane, measured
+#   joint1:   (-90, 90)      shoulder angle in the radial-Z plane, measured
 #                            from horizontal outward (0 = horizontal,
-#                            positive = rising above horizon).
+#                            positive = rising, negative = falling).
 #   joint2:   (-150, 150)    relative angle of link 2 w.r.t. link 1.
 #                            NOTE: the up/down IK branch is selected by the
 #                            sign of (joint2 + delta_g), not by the raw sign
@@ -98,12 +98,12 @@ GRIP_DEPTH: float = FINGER_ARC_RADIUS * math.sin(math.radians(FINGER_CURL_DEG))
 #                            close to the base still push |joint2| toward
 #                            ~150 deg, so the elbow limit is the binding
 #                            constraint on the inner part of the workspace.
-#   joint3:   (-150, 150)    relative angle of link 3 (wrist stem L3) w.r.t. link 2.
+#   joint3:   (-120, 120)    relative angle of link 3 (wrist stem L3) w.r.t. link 2.
 #                            This is the wrist angle between the forearm and the
-#                            fixed stem L3.  The WRIST_STEM_ANGLE constant (-60 deg)
-#                            is the default/home offset baked into the effective
-#                            forearm model.  The physical joint3 rotates L3 around
-#                            the same axis as joint2 (the radial-Z plane).
+#                            stem L3. The public IK default is -60 deg; the legacy
+#                            WRIST_STEM_ANGLE value is not baked into FK or IK.
+#                            The physical joint3 rotates L3 around the same axis
+#                            as joint2 (the radial-Z plane).
 # Numerical tolerances.
 POSITION_TOLERANCE_MM: float = 0.1    # FK -> IK -> FK Cartesian tolerance
 ANGLE_TOLERANCE_RAD: float = 1e-6     # angle-reconstruction tolerance
@@ -500,7 +500,7 @@ def forward_kinematics(
 
     ``theta_base``/``joint1``/``joint2``/``joint3`` in degrees; ``opening`` 0..1
     defaults to ``config.gripper_opening``.  See the module docstring for
-    the model (fixed stem angle, effective forearm).
+    the model (commanded wrist angle, effective forearm).
     """
     return _fk_rad(
         _to_rad(theta_base), _to_rad(joint1), _to_rad(joint2), _to_rad(joint3), config, opening
@@ -810,7 +810,7 @@ def _inverse_kinematics_auto_joint3(
     3. Return the first valid solution on the requested ``joint2_up`` branch
     """
     # Define search range for joint3
-    j3_min, j3_max = config.joint_limits.get("joint3", (-150.0, 150.0))
+    j3_min, j3_max = config.joint_limits.get("joint3", (-120.0, 120.0))
     
     # Order of joint3 values to try: prefer default (-60), then sweep outward
     candidates = [-60.0]
@@ -952,7 +952,7 @@ def verify_fk_ik(
         base = rng.uniform(*config.joint_limits["base"])
         joint1 = rng.uniform(*config.joint_limits["joint1"])
         joint2 = rng.uniform(*config.joint_limits["joint2"])
-        joint3 = rng.uniform(*config.joint_limits.get("joint3", (-150.0, 150.0)))
+        joint3 = rng.uniform(*config.joint_limits.get("joint3", (-120.0, 120.0)))
 
         target = forward_kinematics(base, joint1, joint2, joint3, config, opening)
 

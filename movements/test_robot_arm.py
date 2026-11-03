@@ -11,9 +11,55 @@ class RobotArmFacadeTests(unittest.TestCase):
         config = ra.DEFAULT_CONFIG
         self.assertEqual(
             (config.l0, config.l1, config.l2, config.l3, config.finger_length),
-            (100.0, 400.0, 300.0, 80.0, 150.0),
+            (100.0, 400.0, 300.0, 250.0, 150.0),
         )
         self.assertAlmostEqual(ra.GRIP_DEPTH, 124.0490014699)
+        self.assertEqual(
+            ra.DEFAULT_CONFIG.joint_limits,
+            {
+                "base": (-180.0, 180.0),
+                "joint1": (-90.0, 90.0),
+                "joint2": (-150.0, 150.0),
+                "joint3": (-120.0, 120.0),
+            },
+        )
+
+    def test_two_finger_gripper_is_symmetric_and_keeps_arm_dimensions(self):
+        config = ra.RobotConfig(gripper_fingers=2)
+        self.assertEqual(
+            (config.l0, config.l1, config.l2, config.l3, config.finger_length),
+            (100.0, 400.0, 300.0, 250.0, 150.0),
+        )
+        angles = ra.JointAngles(35.0, 60.0, -25.0, -60.0)
+        pose = (angles.theta_base, angles.joint1, angles.joint2, angles.joint3)
+        two_finger_pose = ra.gripper_pose(*pose, config=config)
+        three_finger_point = ra.forward_kinematics(
+            angles.theta_base, angles.joint1, angles.joint2, angles.joint3
+        )
+        self.assertEqual(len(two_finger_pose.finger_paths), 2)
+        self.assertEqual(len(two_finger_pose.fingertips), 2)
+        self.assertEqual(two_finger_pose.grip_point, three_finger_point)
+
+        closed = ra.gripper_pose(*pose, config=config, opening=0.0)
+        for tip in closed.fingertips:
+            self.assertLess(math.dist(tip.coords(), closed.grip_point.coords()), 1e-9)
+
+        path_a, path_b = two_finger_pose.finger_paths
+        for point_a, point_b in zip(path_a, path_b):
+            midpoint_offset = tuple(
+                point_a.coords()[i] + point_b.coords()[i]
+                - 2.0 * two_finger_pose.gripper_mount.coords()[i]
+                for i in range(3)
+            )
+            cross = (
+                two_finger_pose.axis[1] * midpoint_offset[2]
+                - two_finger_pose.axis[2] * midpoint_offset[1],
+                two_finger_pose.axis[2] * midpoint_offset[0]
+                - two_finger_pose.axis[0] * midpoint_offset[2],
+                two_finger_pose.axis[0] * midpoint_offset[1]
+                - two_finger_pose.axis[1] * midpoint_offset[0],
+            )
+            self.assertLess(math.sqrt(sum(value * value for value in cross)), 1e-9)
 
     def test_base_platform_circle_is_visual_only(self):
         angles = ra.JointAngles(0.0, 45.0, -20.0, -60.0)
@@ -94,7 +140,9 @@ class RobotArmFacadeTests(unittest.TestCase):
         self.assertEqual(result, expected)
 
     def test_auto_joint3_uses_direct_signed_base_yaw_for_target(self):
-        target = ra.CartesianPoint(-300.0, -120.0, 150.0)
+        target = ra.CartesianPoint(
+            -812.2248514304025, -324.8667629845331, -95.55566192449189
+        )
 
         result = ra.inverse_kinematics(target.x, target.y, target.z, joint3="auto")
         expected = ra.inverse_kinematics(target.x, target.y, target.z, joint3=-60.0)
@@ -135,6 +183,16 @@ class RobotArmFacadeTests(unittest.TestCase):
             self.assertFalse(
                 ra.check_joint_limits(base, 90.0, 0.0, -60.0)
             )
+
+    def test_shoulder_and_wrist_limits_are_inclusive_and_enforced(self):
+        for shoulder in (-90.0, 90.0):
+            self.assertTrue(ra.check_joint_limits(0.0, shoulder, 0.0, 0.0))
+        for wrist in (-120.0, 120.0):
+            self.assertTrue(ra.check_joint_limits(0.0, 0.0, 0.0, wrist))
+        self.assertFalse(ra.check_joint_limits(0.0, -90.001, 0.0, 0.0))
+        self.assertFalse(ra.check_joint_limits(0.0, 90.001, 0.0, 0.0))
+        self.assertFalse(ra.check_joint_limits(0.0, 0.0, 0.0, -120.001))
+        self.assertFalse(ra.check_joint_limits(0.0, 0.0, 0.0, 120.001))
 
     def test_joint_limit_checks_reject_non_finite_angles(self):
         for joint_index in range(4):

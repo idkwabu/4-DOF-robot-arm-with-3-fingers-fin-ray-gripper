@@ -17,7 +17,7 @@ ALL_JOINTS = tuple(DEFAULT_STATE)
 JOINT_RANGES = {**JOINT_LIMITS, "gripper": (0, 100)}
 
 DIRECTION_PRESETS = {
-    "up": {"joint1": 120, "joint2": -60, "joint3": -30},
+    "up": {"joint1": 60, "joint2": -30, "joint3": 0},
     "down": {"joint1": 60, "joint2": -90, "joint3": -60},
     # A plain turn swings 45 degrees off the middle; "hard" swings the full 90
     # to the mechanical limit. Diagonals turn exactly as far as the plain turn
@@ -26,8 +26,8 @@ DIRECTION_PRESETS = {
     "right": {"base": 45},
     "hard-left": {"base": 180},
     "hard-right": {"base": 0},
-    "up-left": {"base": 135, "joint1": 120, "joint2": -60, "joint3": -30},
-    "up-right": {"base": 45, "joint1": 120, "joint2": -60, "joint3": -30},
+    "up-left": {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0},
+    "up-right": {"base": 45, "joint1": 60, "joint2": -30, "joint3": 0},
     "down-left": {"base": 135, "joint1": 60, "joint2": -90, "joint3": -60},
     "down-right": {"base": 45, "joint1": 60, "joint2": -90, "joint3": -60},
     # Centering the base on its own mechanical middle. The compound forms pair
@@ -35,7 +35,7 @@ DIRECTION_PRESETS = {
     # left base with the same tilt, so middle axes stay base-only and only the
     # compounds may move the arm.
     "middle": {"base": 90},
-    "up-middle": {"base": 90, "joint1": 120, "joint2": -60, "joint3": -30},
+    "up-middle": {"base": 90, "joint1": 60, "joint2": -30, "joint3": 0},
     "down-middle": {"base": 90, "joint1": 60, "joint2": -90, "joint3": -60},
 }
 VERTICAL_JOINTS = ("joint1", "joint2", "joint3")

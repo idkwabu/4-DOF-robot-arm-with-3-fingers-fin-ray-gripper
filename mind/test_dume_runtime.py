@@ -29,9 +29,19 @@ class DumERuntimeTests(unittest.TestCase):
     def test_all_interfaces_use_the_shared_joint_limits(self):
         shared = dict(dume.JOINT_LIMITS)
         self.assertEqual(shared["base"], (-180.0, 180.0))
+        self.assertEqual(shared["joint1"], (-90.0, 90.0))
+        self.assertEqual(shared["joint2"], (-150.0, 150.0))
+        self.assertEqual(shared["joint3"], (-120.0, 120.0))
         self.assertEqual(brain.JOINT_RANGES, {**shared, "gripper": (0, 100)})
         self.assertEqual(dume.JOINT_RANGES, {**shared, "gripper": (0, 100)})
         self.assertEqual(movement_arm.JOINT_LIMITS, shared)
+        self.assertEqual(
+            (dume.CONFIG.l0, dume.CONFIG.l1, dume.CONFIG.l2,
+             dume.CONFIG.l3, dume.CONFIG.finger_length),
+            (movement_arm.DEFAULT_CONFIG.l0, movement_arm.DEFAULT_CONFIG.l1,
+             movement_arm.DEFAULT_CONFIG.l2, movement_arm.DEFAULT_CONFIG.l3,
+             movement_arm.DEFAULT_CONFIG.finger_length),
+        )
 
     def test_kinematics_reject_invalid_opening_and_empty_verification(self):
         angles = dume.HOME_ANGLES
@@ -51,7 +61,7 @@ class DumERuntimeTests(unittest.TestCase):
     def test_visual_pose_state_writes_all_validated_joint_values(self):
         pose = {
             "base": -135.5,
-            "joint1": 120,
+            "joint1": 60,
             "joint2": -60.25,
             "joint3": -30,
             "gripper": 75.5,
@@ -84,7 +94,7 @@ class DumERuntimeTests(unittest.TestCase):
     def test_ensure_state_file_creates_root_mirror_from_shared_state(self):
         pose = {
             "base": -45,
-            "joint1": 100,
+            "joint1": 45,
             "joint2": -80,
             "joint3": -35,
             "gripper": 25,
@@ -129,7 +139,9 @@ class DumERuntimeTests(unittest.TestCase):
             self.assertEqual(math.copysign(1, effective_elbow), expected_sign)
 
     def test_auto_ik_uses_signed_base_yaw_for_reported_target(self):
-        target = dume.CartesianPoint(-300.0, -120.0, 150.0)
+        target = dume.CartesianPoint(
+            -812.2248514304025, -324.8667629845331, -95.55566192449189
+        )
         result = dume.inverse_kinematics(
             target.x, target.y, target.z, joint3="auto"
         )

@@ -81,7 +81,8 @@ The watcher reads the root `robot_state.json` by default and sends each changed 
 `--state PATH` to choose another JSON file, `--baud RATE` to override the 115200 baud
 default, or `--poll SECONDS` to change the 0.1-second polling interval. It validates each
 joint against its logical limits and linearly maps the whole logical range to 0..180:
-base -180..180, joint1 0..180, joint2 and joint3 -150..150, and gripper 0..100. These are
+base -180..180, shoulder/joint1 -90..90, elbow/joint2 -150..150, wrist/joint3 -120..120,
+and gripper 0..100. These are
 generic mappings, not hardware calibration: adjust servo direction, neutral point, and
 mechanical travel for your specific arm before attaching linkages. Power servos from a
 suitable external supply, not the Arduino 5V pin, and connect the supply ground to Arduino
@@ -109,10 +110,12 @@ pip install torch transformers matplotlib numpy
 | Command | What it is |
 |---|---|
 | `python Dum-E.py` | Main GUI: text box, live 3D preview, parser and model together |
+| `python Dum-E-2finger.py` | Full Dum-E GUI with two symmetrical fingers and the same arm dimensions |
 | `python mind/mind.py` | The brain on its own, as a CLI. Useful for debugging the pipeline |
 | `python movements/robot_arm_gui.py` | Kinematics sandbox: sliders, FK/IK, reach envelope |
+| `python movements/robot_arm_2finger_gui.py` | Same kinematics sandbox with two symmetric fingers (same dimensions) |
 
-`Dum-E.py` and `mind/mind.py` both need the model weights to answer anything the
+`Dum-E.py`, `Dum-E-2finger.py` and `mind/mind.py` both need the model weights to answer anything the
 deterministic parser does not cover. `movements/robot_arm_gui.py` does not.
 
 ### Model weights are not in the repository
@@ -171,6 +174,7 @@ Dum-E.py     mind/mind.py          <- language layer
 | File | Responsibility |
 |---|---|
 | `Dum-E.py` | Main GUI. Contains its own copy of the parser and its own copy of the kinematics. |
+| `Dum-E-2finger.py` | Launches the main GUI with the same parser and kinematics, configured for two symmetrical fingers. |
 | `robot_contract.py` | Shared joint-limit contract imported by the GUI, CLI brain, and kinematics module. |
 | `mind/mind.py` | The language layer alone, as a CLI. Reference copy of the parser; the two copies are held byte-identical in behaviour by the differential harness. |
 | `mind/system_prompt.txt` | The contract handed to the model. Defines actions and directions. |
@@ -183,6 +187,7 @@ Dum-E.py     mind/mind.py          <- language layer
 | `mind/robot_dataset_eval.jsonl` | 1716 holdout rows. |
 | `movements/robot_arm.py` | Forward/inverse kinematics, gripper, reach envelope. |
 | `movements/robot_arm_gui.py` | Tkinter + Matplotlib control panel for the above. |
+| `movements/robot_arm_2finger_gui.py` | Alternate kinematics GUI with two symmetric fingers; reuses the same arm model and dimensions. |
 | `features_macro/hand_recognition.py` | Empty. Placeholder for a future gesture layer. |
 
 ### Why the duplication
@@ -291,36 +296,36 @@ All values in degrees.
 
 ```python
 DIRECTION_PRESETS = {
-    "up":           {"joint1": 120, "joint2": -60, "joint3": -30},
+    "up":           {"joint1": 60, "joint2": -30, "joint3": 0},
     "down":         {"joint1":  60, "joint2": -90, "joint3": -60},
     "left":         {"base": 135},
     "right":        {"base":  45},
     "hard-left":    {"base": 180},
     "hard-right":   {"base":   0},
-    "up-left":      {"base": 135, "joint1": 120, "joint2": -60, "joint3": -30},
-    "up-right":     {"base":  45, "joint1": 120, "joint2": -60, "joint3": -30},
+    "up-left":      {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0},
+    "up-right":     {"base":  45, "joint1": 60, "joint2": -30, "joint3": 0},
     "down-left":    {"base": 135, "joint1":  60, "joint2": -90, "joint3": -60},
     "down-right":   {"base":  45, "joint1":  60, "joint2": -90, "joint3": -60},
     "middle":       {"base":  90},
-    "up-middle":    {"base":  90, "joint1": 120, "joint2": -60, "joint3": -30},
+    "up-middle":    {"base":  90, "joint1": 60, "joint2": -30, "joint3": 0},
     "down-middle":  {"base":  90, "joint1":  60, "joint2": -90, "joint3": -60},
 }
 ```
 
 | Direction | Action | base | joint1 | joint2 | joint3 |
 |---|---|---|---|---|---|
-| `up` | tilt | — | 120 | -60 | -30 |
+| `up` | tilt | — | 60 | -30 | 0 |
 | `down` | tilt | — | 60 | -90 | -60 |
 | `left` | turn | 135 | — | — | — |
 | `right` | turn | 45 | — | — | — |
 | `hard-left` | turn | 180 | — | — | — |
 | `hard-right` | turn | 0 | — | — | — |
-| `up-left` | move | 135 | 120 | -60 | -30 |
-| `up-right` | move | 45 | 120 | -60 | -30 |
+| `up-left` | move | 135 | 60 | -30 | 0 |
+| `up-right` | move | 45 | 60 | -30 | 0 |
 | `down-left` | move | 135 | 60 | -90 | -60 |
 | `down-right` | move | 45 | 60 | -90 | -60 |
 | `middle` | turn | 90 | — | — | — |
-| `up-middle` | move | 90 | 120 | -60 | -30 |
+| `up-middle` | move | 90 | 60 | -30 | 0 |
 | `down-middle` | move | 90 | 60 | -90 | -60 |
 
 Omitted columns are left at their current value. This is what makes `middle` non-destructive.
@@ -338,9 +343,9 @@ The model also has a `default` direction for non-spatial actions (`home`, `stop`
 ```python
 JOINT_RANGES = {
     "base":   (-180, 180),   # signed yaw range; 90 is the command preset's centre
-    "joint1": (0, 180),
+    "joint1": (-90, 90),
     "joint2": (-150, 150),
-    "joint3": (-150, 150),
+    "joint3": (-120, 120),
     "gripper": (0, 100),
 }
 
@@ -372,8 +377,8 @@ agrees with it. Where anything still conflicts, the source is correct.
 | `L0` | 100 mm | Fixed vertical base column, not a controlled joint |
 | `L1` | 400 mm | Upper arm, driven by `joint1` |
 | `L2` | 300 mm | Forearm, driven by `joint2` |
-| `L3` | 80 mm | Wrist link, driven by `joint3` |
-| `WRIST_STEM_ANGLE` | -60° | Fixed wrist-to-finger offset |
+| `L3` | 250 mm | Wrist link, driven by `joint3` |
+| `WRIST_STEM_ANGLE` | -60° | Legacy reporting value; live FK/IK use `joint3` |
 | `GRIPPER_FINGERS` | 3 | |
 | `FINGER_LENGTH` (`Lf`) | 150 mm | Arc length of one rigid finger |
 | `FINGER_OPENING_DEG` | 30° | Max swing of a finger off the tool axis |
@@ -396,7 +401,7 @@ Not the wrist. The return value is the point between the fingertips, which is wh
 import robot_arm as ra
 
 ra.forward_kinematics(45, 30, -20, -60, ra.DEFAULT_CONFIG, 1.0)
-# -> CartesianPoint(x=546.6025, y=546.6025, z=195.7838) mm
+# -> CartesianPoint(x=623.8708, y=623.8708, z=65.5563) mm
 ```
 
 ### Reach envelope
@@ -408,22 +413,22 @@ grasp point is a fixed on-axis depth, so there is one envelope per `joint3`:
 
 | `joint3` | Reach |
 |---|---|
-| −150° | 239.97 – 560.03 mm |
-| −120° | 134.63 – 665.37 mm |
-| −90° | 37.18 – 762.82 mm |
-| −60° (default) | 39.15 – 839.15 mm |
-| −30° | 87.51 – 887.51 mm |
-| **0°** | 104.05 – **904.05 mm** |
-| +60° | 39.15 – 839.15 mm |
-| +90° | 37.18 – 762.82 mm |
-| +150° | 239.97 – 560.03 mm |
+| −120° | 56.93 – 743.07 mm |
+| −90° | 79.49 – 879.49 mm |
+| −60° (default) | 184.92 – 984.92 mm |
+| −30° | 251.36 – 1051.36 mm |
+| **0°** | 274.05 – **1074.05 mm** |
+| +30° | 251.36 – 1051.36 mm |
+| +60° | 184.92 – 984.92 mm |
+| +90° | 79.49 – 879.49 mm |
+| +120° | 56.93 – 743.07 mm |
 
-**Maximum reach is 904.05 mm, at `joint3 = 0°`** — not at the `joint3 = −60°` default,
+**Maximum reach is 1074.05 mm, at `joint3 = 0°`** — not at the `joint3 = −60°` default,
 which is the figure most references quote.
 
-The inner bound is a signed quantity reported as a distance. `m` crosses `L1 = 400 mm`
-at `joint3 ≈ ±76.60°`, where the reported inner bound collapses to 0.00 mm; on either side
-of that the arm can reach essentially its own base. See
+The inner bound is a signed quantity reported as a distance. `m` equals `L1 = 400 mm`
+at `joint3 ≈ ±111.02°`, so the inner bound reaches zero within the allowed range; at
+either ±120° limit it is 56.93 mm. See
 [known issue 13](#13-absl1---m-hides-a-sign-change).
 
 Earlier revisions had the grip depth fall as the fingers opened (`l_g = FINGER_LENGTH·cos(spread)`),
@@ -433,7 +438,8 @@ the arm's kinematics at all. See [known issue 14](#14-opening-once-leaked-into-t
 
 ### Verification
 
-`verify_fk_ik()` round-trips 40 random poses through FK and back:
+`verify_fk_ik()` checks 20 random poses, round-tripping each through both elbow
+branches:
 
 ```
 Position error: 0.000000 mm  (tolerance 0.1 mm)
@@ -501,7 +507,7 @@ This is the central trick, and the reason the arm is tractable.
 plane as complex numbers:
 
 ```
-z  ≡ L2 + (L3 + l_g) · e^(iφ),   φ = WRIST_STEM_ANGLE = -60°
+z  ≡ L2 + (L3 + l_g) · e^(iφ),   φ = joint3 = -60° (example)
 m  = |z|            effective forearm length
 δ  = arg(z)         effective forearm offset angle
 ```
@@ -513,10 +519,10 @@ arm into a plain two-link arm** with links `(L1, m)`.
 For the stem alone, with no finger contribution:
 
 ```
-m = |300 + 80·e^(i(-60°))| = 346.987 mm      δ = -11.518°
+m = |300 + 250·e^(i(-60°))| = 476.970 mm      δ = -26.996°
 ```
 
-Compare that with the naive `L2 + L3 = 380 mm`. Folding saves **33.013 mm**, because `L3`
+Compare that with the naive `L2 + L3 = 550 mm`. Folding saves **73.030 mm**, because `L3`
 is pitched −60° rather than collinear with `L2`. Treating the links as a simple sum
 overstates the arm's length by nearly a tenth.
 
@@ -544,24 +550,24 @@ orientations, not relative deltas. The grip point then advances a further `l_g` 
 tool axis, whose unit vector is
 `ax = (cos(γ)cos(θ_base), cos(γ)sin(θ_base), sin(γ))` with `γ = joint1 + joint2 + joint3`.
 
-Worked example, the `up` preset `(90, 120, -60, -30)`:
+Worked example, the `up` preset `(90, 60, -30, 0)`:
 
 ```
-r₂ = 400·cos(120°)              = -200.000   z₂ = 100 + 400·sin(120°)   = 446.410
-r₃ = -200 + 300·cos(60°)        =  -50.000   z₃ = 446.410 + 300·sin(60°)= 706.218
-r_m = -50 + 80·cos(30°)         =   19.282   z_m = 706.218 + 80·sin(30°)= 746.218
-x   = 19.282·cos(90°)           =    0.000   y   = 19.282·sin(90°)      =  19.282
+r₂ = 400·cos(60°)               =  200.000   z₂ = 100 + 400·sin(60°)   = 446.410
+r₃ = 200 + 300·cos(30°)         =  459.808   z₃ = 446.410 + 300·sin(30°)= 596.410
+r_m = 459.808 + 250·cos(30°)    =  676.314   z_m = 596.410 + 250·sin(30°)= 721.410
+x   = 676.314·cos(90°)          =    0.000   y   = 676.314·sin(90°)     = 676.314
 ```
 
-The grip point then advances `l_g = 124.049` mm along the tool axis, whose unit vector at
-`γ = 30°` is `(0, 0.866025, 0.500000)`, giving `(0.00, 126.71, 808.24)` mm. Verify it
+The grip point then advances `l_g = 206.748` mm along the tool axis, whose unit vector at
+`γ = 30°` is `(0, 0.866025, 0.500000)`, giving `(0.00, 855.36, 824.78)` mm. Verify it
 yourself:
 
 ```python
 import robot_arm as ra
 
-ra.forward_kinematics(90, 120, -60, -30, ra.DEFAULT_CONFIG, 1.0)
-# -> CartesianPoint(x=0.0, y=126.7116, z=808.2423) mm
+ra.forward_kinematics(90, 60, -30, 0, ra.DEFAULT_CONFIG, 1.0)
+# -> CartesianPoint(x=0.0, y=783.7436, z=783.4347) mm
 ```
 
 ### The distance identity
@@ -610,8 +616,8 @@ different questions, although all interfaces now share the same configured range
 ```python
 import robot_arm as ra
 
-a = ra.inverse_kinematics(300, 0, 200, joint2_up=True, opening=1.0)
-# JointAngles(theta_base=0.0, joint1=93.04, joint2=-112.30, joint3=-60.0)
+a = ra.inverse_kinematics(300, 0, 200, joint2_up=True, joint3="auto", opening=1.0)
+# JointAngles(theta_base=0.0, joint1=88.037, joint2=-73.706, joint3=-105.0)
 ra.forward_kinematics(a.theta_base, a.joint1, a.joint2, a.joint3, ra.DEFAULT_CONFIG, 1.0)
 # -> (300.00, 0.00, 200.00) mm, exactly on target
 ```
@@ -627,11 +633,11 @@ both geometrically reachable and inside every joint limit:
 import robot_arm as ra
 
 ra.inverse_kinematics(600, 0, 0, joint3="auto", opening=1.0)
-# -> JointAngles(theta_base=0.0, joint1=36.683, joint2=-63.474, joint3=-60.0)
+# -> JointAngles(theta_base=0.0, joint1=57.827, joint2=-72.772, joint3=-60.0)
 ```
 
-Near targets `(50, 0, 50)` reach it with `joint3 = -75°`, the folded configuration, which
-is why the inner reach bound collapses to nearly zero there.
+The inner reach falls to zero at `joint3 ≈ ±111.02°`; at either wrist limit
+(`joint3 = ±120°`) it is 56.93 mm.
 The requested `joint2_up` branch is searched across all wrist candidates first; only if
 that branch has no limit-valid solution does `"auto"` try the alternate elbow branch.
 
@@ -646,7 +652,7 @@ gripper always approaches the target along a vertical line:
 import robot_arm as ra
 
 a = ra.inverse_kinematics(300, 120, 150, joint3="down", opening=1.0)
-# -> JointAngles(theta_base=21.801, joint1=81.569, joint2=-109.740, joint3=-61.830)
+# -> JointAngles(theta_base=21.801, joint1=86.541, joint2=-81.803, joint3=-94.738)
 a.joint1 + a.joint2 + a.joint3
 # -> -90.0
 ```
@@ -885,8 +891,8 @@ The previously reported `RobotArm` facade argument-forwarding defect is fixed; s
 ### 1. Joint-limit drift between kinematics copies — resolved
 
 `Dum-E.py`, `mind/mind.py`, and `movements/robot_arm.py` now import the physical joint
-ranges from `robot_contract.py`: base is `−180–180°`, joint1 is `0–180°`, and joint2/joint3
-are `−150–150°`. The mathematical implementations remain separate, so they can still
+ranges from `robot_contract.py`: base is `−180–180°`, shoulder/joint1 is `−90–90°`,
+elbow/joint2 is `−150–150°`, and wrist/joint3 is `−120–120°`. The mathematical implementations remain separate, so they can still
 drift in behavior even though their configured limits match.
 
 ### 2. The shipped adapter predates the current dataset
@@ -958,7 +964,7 @@ gripper models; that, not a typo, is why every downstream number was off.
 That full-length model has itself since been replaced: the fingers are now rigid curled
 talons and the grip depth is the constant `l_g = 124.05 mm` (see
 [issue 14](#14-opening-once-leaked-into-the-kinematic-chain)). The current figures are
-`m_g = 439.15 mm` at `joint3 = -60°` and a maximum reach of **904.05 mm** at `joint3 = 0°`.
+`m_g = 584.92 mm` at `joint3 = -60°` and a maximum reach of **1074.05 mm** at `joint3 = 0°`.
 
 Also stale and now fixed:
 
@@ -1002,15 +1008,11 @@ removed; its `is_reachable` delegates to inverse kinematics directly.
 
 ### 13. `abs(L1 - m)` hides a sign change
 
-The inner reach bound is reported as `abs(L1 - m)`, but `L1 - m` is genuinely **negative**
-across most of the range: `m` exceeds `L1 = 400 mm` for any `joint3` between roughly
-−76.60° and +76.60°, and is symmetric in the sign of `joint3` because `m` depends on
-`cos(joint3)`.
-
-At `joint3 ≈ ±76.60°`, `m = L1`, and the reported inner bound collapses to
-**0.00 mm** — the arm can reach its own base. That is correct as a *distance*, and it is
-the number a caller should compare against, but it hides the fact that the arm is fully
-folded there. The signed value is the more informative quantity.
+The inner reach bound is reported as `abs(L1 - m)`. With the current dimensions, `m`
+equals `L1 = 400 mm` at `joint3 ≈ ±111.02°`, inside the allowed wrist travel, so the
+inner bound reaches zero there. At either wrist limit (`joint3 = ±120°`), the inner
+bound is 56.93 mm. The bound is symmetric in the sign of `joint3` because `m` depends
+on `cos(joint3)`.
 
 ### 14. Opening once leaked into the kinematic chain
 

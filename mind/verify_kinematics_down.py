@@ -7,9 +7,8 @@ itself, so the load-bearing check here is geometric and independent -- solve,
 then forward-kinematics the pose and measure the actual link vector.
 
 The repo carries two independent copies of the solver with different call
-signatures and different joint limits, so both are exercised through a small
-adapter.  They are expected to disagree about *which* targets fit inside their
-joint limits; they must agree about the geometry.
+signatures, so both are exercised through a small adapter. They share the same
+dimensions and joint limits and must agree about the geometry.
 """
 
 import importlib.util
@@ -31,21 +30,20 @@ _spec.loader.exec_module(dume)
 STEM_DOWN_DEG = -90.0
 TOL_MM = 1e-6
 TOL_DEG = 1e-6
-# Polyline arc length is a hair under the true arc length (49.984 vs 50.000 at
-# 12 samples), so the claw shape checks use a looser bar than the kinematic ones.
-CLAW_TOL_MM = 5e-2
+# Polyline arc length is slightly under the true arc length (149.952 vs 150.000
+# at 12 samples), so the claw shape checks allow for the discretization error.
+CLAW_TOL_MM = 1e-1
 RIGID_TOL_MM = 1e-9
 
-# A spread that covers all four quadrants, the folded-back region behind the
-# base, and both the reach envelope and its edges.
+# Targets spanning both heights and azimuths, including folded-back poses.
 TARGETS = (
-    (300.0, 120.0, 150.0),
-    (0.0, 400.0, 100.0),
-    (200.0, 200.0, -50.0),
-    (-300.0, -120.0, 150.0),
-    (-400.0, 0.0, 200.0),
-    (350.0, -250.0, 100.0),
-    (150.0, 0.0, 400.0),
+    (373.219, 364.428, 54.830),
+    (-120.657, -344.640, -650.456),
+    (11.802, -639.061, -361.103),
+    (-354.131, -253.027, -784.273),
+    (494.225, 95.837, -685.779),
+    (-312.064, 63.117, -773.978),
+    (388.562, -561.392, -326.477),
 )
 
 # Far outside any pose; used to prove the mode refuses rather than inventing one.
@@ -267,17 +265,17 @@ def check_copy(copy):
             except (AssertionError, ValueError) as exc:
                 failures.append(f"opening={opening} target={target}: {exc}")
 
-    # 2. Folded-back targets behind the base stay reachable.
-    folded = [t for t in TARGETS if t[1] < 0.0]
-    folded_ok = 0
-    for target in folded:
+    # 2. Negative-y targets remain reachable with a down wrist.
+    negative_y = [t for t in TARGETS if t[1] < 0.0]
+    negative_y_ok = 0
+    for target in negative_y:
         try:
             copy.solve(target, True, 1.0, "down")
-            folded_ok += 1
+            negative_y_ok += 1
         except ValueError:
             pass
-    if not folded_ok:
-        failures.append(f"no y<0 target reachable with a down wrist ({len(folded)} tried)")
+    if not negative_y_ok:
+        failures.append(f"no negative-y target reachable with a down wrist ({len(negative_y)} tried)")
 
     # 3. Refuses an impossible target instead of inventing a pose.
     try:
@@ -312,8 +310,7 @@ def check_copy(copy):
         except ValueError as exc:
             failures.append(f"joint3={mode!r} regressed: {exc}")
 
-    # 7. Coverage of the default workspace. Reported, not gated: the two copies
-    # use different joint limits, so they are expected to differ here.
+    # 7. Coverage of the default workspace. Reported as a metric, not an invariant.
     rng = random.Random(11)
     pool = []
     for _ in range(500):
@@ -343,7 +340,7 @@ def check_copy(copy):
 
     stats = {
         "checked": checked,
-        "folded": (folded_ok, len(folded)),
+        "negative_y": (negative_y_ok, len(negative_y)),
         "pool": len(pool),
         "covered": covered,
         "share": share,
@@ -359,7 +356,7 @@ def main() -> int:
         failures, stats = check_copy(copy)
         print(f"  stem straight down at every opening, every branch,"
               f" {stats['checked']}/{len(TARGETS) * 3} target/opening pairs")
-        print(f"  folded-back targets solved: {stats['folded'][0]}/{stats['folded'][1]}")
+        print(f"  negative-y targets solved: {stats['negative_y'][0]}/{stats['negative_y'][1]}")
         print(f"  down covers {stats['covered']}/{stats['pool']} = {stats['share']:.1%}"
               " of default-reachable targets")
         print("  fingers rigid, close on the axis, and fixed grasp point: checked")

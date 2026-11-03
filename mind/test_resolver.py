@@ -26,18 +26,18 @@ def check_true(label, value):
 
 VERTICAL = ("joint1", "joint2", "joint3")
 EXPECTED_PRESETS = {
-    "up": {"base": None, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None},
+    "up": {"base": None, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None},
     "down": {"base": None, "joint1": 60, "joint2": -90, "joint3": -60, "gripper": None},
     "left": {"base": 135, "joint1": None, "joint2": None, "joint3": None, "gripper": None},
     "right": {"base": 45, "joint1": None, "joint2": None, "joint3": None, "gripper": None},
     "hard-left": {"base": 180, "joint1": None, "joint2": None, "joint3": None, "gripper": None},
     "hard-right": {"base": 0, "joint1": None, "joint2": None, "joint3": None, "gripper": None},
-    "up-left": {"base": 135, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None},
-    "up-right": {"base": 45, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None},
+    "up-left": {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None},
+    "up-right": {"base": 45, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None},
     "down-left": {"base": 135, "joint1": 60, "joint2": -90, "joint3": -60, "gripper": None},
     "down-right": {"base": 45, "joint1": 60, "joint2": -90, "joint3": -60, "gripper": None},
     "middle": {"base": 90, "joint1": None, "joint2": None, "joint3": None, "gripper": None},
-    "up-middle": {"base": 90, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None},
+    "up-middle": {"base": 90, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None},
     "down-middle": {"base": 90, "joint1": 60, "joint2": -90, "joint3": -60, "gripper": None},
 }
 ANGLE_KEYS = ("base", "joint1", "joint2", "joint3", "gripper")
@@ -113,7 +113,10 @@ def test_validation_rejects():
     check_true("negative base inside signed yaw range is accepted", mind.is_valid_command(mutate(base=-5)))
     check_true("base below signed yaw range is rejected", not mind.is_valid_command(mutate(base=-181)))
     check_true("gripper above 100 is rejected", not mind.is_valid_command(mutate(gripper=150)))
-    check_true("joint1 above 180 is rejected", not mind.is_valid_command(mutate(joint1=181)))
+    check_true("joint1 above 90 is rejected", not mind.is_valid_command(mutate(joint1=91)))
+    check_true("joint1 below -90 is rejected", not mind.is_valid_command(mutate(joint1=-91)))
+    check_true("joint3 above 120 is rejected", not mind.is_valid_command(mutate(joint3=121)))
+    check_true("joint3 below -120 is rejected", not mind.is_valid_command(mutate(joint3=-121)))
     check_true("a missing field is rejected", not mind.is_valid_command({"action": "move", "direction": "up"}))
     check_true("an extra field is rejected", not mind.is_valid_command({**mind.resolve_command("move", "up"), "speed": 1}))
     check_true("an unknown action is rejected", not mind.is_valid_command(mutate(action="fly")))
@@ -135,9 +138,9 @@ def test_local_parser():
         ("turn left", {"action": "turn", "direction": "left", "base": 135, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
         ("Turn the base all the way to the left", {"action": "turn", "direction": "hard-left", "base": 180, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
         ("swivel to the right", {"action": "turn", "direction": "right", "base": 45, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
-        ("tilt up", {"action": "tilt", "direction": "up", "base": None, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None}),
+        ("tilt up", {"action": "tilt", "direction": "up", "base": None, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None}),
         ("lower the arm", {"action": "tilt", "direction": "down", "base": None, "joint1": 60, "joint2": -90, "joint3": -60, "gripper": None}),
-        ("move up and to the left", {"action": "move", "direction": "up-left", "base": 135, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None}),
+        ("move up and to the left", {"action": "move", "direction": "up-left", "base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None}),
         ("Go down right", {"action": "move", "direction": "down-right", "base": 45, "joint1": 60, "joint2": -90, "joint3": -60, "gripper": None}),
         ("open the gripper", {"action": "move", "direction": "default", "base": None, "joint1": None, "joint2": None, "joint3": None, "gripper": 100}),
         ("close the hand", {"action": "move", "direction": "default", "base": None, "joint1": None, "joint2": None, "joint3": None, "gripper": 0}),
@@ -146,7 +149,7 @@ def test_local_parser():
         ("rotate the base to ninety degrees", {"action": "turn", "direction": "default", "base": 90, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
         ("Move the base to 135", {"action": "turn", "direction": "default", "base": 135, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
         ("set joint two to minus sixty", {"action": "move", "direction": "default", "base": None, "joint1": None, "joint2": -60, "joint3": None, "gripper": None}),
-        ("Put J1 at 120, J2 at 30, and open the fingers", {"action": "move", "direction": "default", "base": None, "joint1": 120, "joint2": 30, "joint3": None, "gripper": 100}),
+        ("Put J1 at 60, J2 at 30, and open the fingers", {"action": "move", "direction": "default", "base": None, "joint1": 60, "joint2": 30, "joint3": None, "gripper": 100}),
         ("set both joints to zero", {"action": "move", "direction": "default", "base": None, "joint1": 0, "joint2": 0, "joint3": 0, "gripper": None}),
         ("turn left and open the gripper", {"action": "turn", "direction": "left", "base": 135, "joint1": None, "joint2": None, "joint3": None, "gripper": 100}),
         ("stop", {"action": "stop", "direction": "default", "base": None, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
@@ -159,20 +162,20 @@ def test_local_parser():
         ("Make a fist", {"action": "move", "direction": "default", "base": None, "joint1": None, "joint2": None, "joint3": None, "gripper": 0}),
         ("Rotate the base halfway", {"action": "turn", "direction": "middle", "base": 90, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
         ("Go ahead and turn left", {"action": "turn", "direction": "left", "base": 135, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
-        ("Go ahead and raise the arm", {"action": "tilt", "direction": "up", "base": None, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None}),
-        ("Go ahead and move up-left", {"action": "move", "direction": "up-left", "base": 135, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None}),
+        ("Go ahead and raise the arm", {"action": "tilt", "direction": "up", "base": None, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None}),
+        ("Go ahead and move up-left", {"action": "move", "direction": "up-left", "base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None}),
         ("I need you to stop everything immediately", {"action": "stop", "direction": "default", "base": None, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
         ("move straight ahead", {"action": "turn", "direction": "middle", "base": 90, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
         ("lower the arm to the left", {"action": "move", "direction": "down-left", "base": 135, "joint1": 60, "joint2": -90, "joint3": -60, "gripper": None}),
-        ("raise it and turn right", {"action": "move", "direction": "up-right", "base": 45, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None}),
-        ("turn left and raise the arm", {"action": "move", "direction": "up-left", "base": 135, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None}),
+        ("raise it and turn right", {"action": "move", "direction": "up-right", "base": 45, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None}),
+        ("turn left and raise the arm", {"action": "move", "direction": "up-left", "base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None}),
         ("push it down and to the right", {"action": "move", "direction": "down-right", "base": 45, "joint1": 60, "joint2": -90, "joint3": -60, "gripper": None}),
-        ("lift the arm and swing left", {"action": "move", "direction": "up-left", "base": 135, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None}),
+        ("lift the arm and swing left", {"action": "move", "direction": "up-left", "base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None}),
         ("Rotate the base to one hundred and thirty five degrees", {"action": "turn", "direction": "default", "base": 135, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
         ("Turn the base to one hundred twenty", {"action": "turn", "direction": "default", "base": 120, "joint1": None, "joint2": None, "joint3": None, "gripper": None}),
         ("Set joint three to minus thirty and close the gripper", {"action": "move", "direction": "default", "base": None, "joint1": None, "joint2": None, "joint3": -30, "gripper": 0}),
-        ("Move the first joint to 180 and the second to 90, fingers 25 percent open", {"action": "move", "direction": "default", "base": None, "joint1": 180, "joint2": 90, "joint3": None, "gripper": 25}),
-        ("Move the arm to base 45, joint1 120, joint2 30, gripper 50", {"action": "move", "direction": "default", "base": 45, "joint1": 120, "joint2": 30, "joint3": None, "gripper": 50}),
+        ("Move the first joint to 90 and the second to 90, fingers 25 percent open", {"action": "move", "direction": "default", "base": None, "joint1": 90, "joint2": 90, "joint3": None, "gripper": 25}),
+        ("Move the arm to base 45, joint1 60, joint2 30, gripper 50", {"action": "move", "direction": "default", "base": 45, "joint1": 60, "joint2": 30, "joint3": None, "gripper": 50}),
     ]
     for prompt, expected in cases:
         command = mind.build_local_command(prompt)
@@ -341,7 +344,7 @@ def test_bare_middle():
 def test_middle_compound_directions():
     """up-middle and down-middle pair a centered base with the up/down tilt."""
     up = {"action": "move", "direction": "up-middle", "base": 90,
-          "joint1": 120, "joint2": -60, "joint3": -30, "gripper": None}
+          "joint1": 60, "joint2": -30, "joint3": 0, "gripper": None}
     down = {"action": "move", "direction": "down-middle", "base": 90,
             "joint1": 60, "joint2": -90, "joint3": -60, "gripper": None}
     for prompt in ("up middle", "raise the arm to the middle", "move up and face the middle",
@@ -411,20 +414,20 @@ def test_state_handling():
         original = mind.STATE_FILE
         mind.STATE_FILE = Path(tmp) / "robot_state.json"
         try:
-            mind._write_json(mind.STATE_FILE, {"base": 45, "joint1": 135, "joint2": 30, "joint3": 30, "gripper": 25})
-            check("state loads", mind.load_state(), {"base": 45, "joint1": 135, "joint2": 30, "joint3": 30, "gripper": 25})
+            mind._write_json(mind.STATE_FILE, {"base": 45, "joint1": 45, "joint2": 30, "joint3": 30, "gripper": 25})
+            check("state loads", mind.load_state(), {"base": 45, "joint1": 45, "joint2": 30, "joint3": 30, "gripper": 25})
 
             mind.save_state(mind.resolve_command("turn", "left"))
-            check("turn left only moves the base", mind.load_state(), {"base": 135, "joint1": 135, "joint2": 30, "joint3": 30, "gripper": 25})
+            check("turn left only moves the base", mind.load_state(), {"base": 135, "joint1": 45, "joint2": 30, "joint3": 30, "gripper": 25})
 
             mind.save_state(mind.resolve_command("tilt", "up"))
-            check("tilt up keeps the base and gripper", mind.load_state(), {"base": 135, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": 25})
+            check("tilt up keeps the base and gripper", mind.load_state(), {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": 25})
 
             mind.save_state(mind.resolve_command("move", "default", {"gripper": 100}))
-            check("a gripper move leaves the angles alone", mind.load_state(), {"base": 135, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": 100})
+            check("a gripper move leaves the angles alone", mind.load_state(), {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": 100})
 
             mind.save_state(mind.resolve_command("stop"))
-            check("stop never moves the arm", mind.load_state(), {"base": 135, "joint1": 120, "joint2": -60, "joint3": -30, "gripper": 100})
+            check("stop never moves the arm", mind.load_state(), {"base": 135, "joint1": 60, "joint2": -30, "joint3": 0, "gripper": 100})
 
             mind.save_state(mind.resolve_command("home"))
             check("home resets everything", mind.load_state(), dict(mind.DEFAULT_STATE))

@@ -104,8 +104,8 @@ mean "unchanged", and they are filled in before anything is written.
 The first pose is the home state above, so a command that names only the base
 still arrives as a full set of five angles.
 
-Ranges: base -180..180, joint1 0..180, joint2 and joint3 -150..150, gripper
-0..100.
+Ranges: base -180..180, shoulder/joint1 -90..90, elbow/joint2 -150..150,
+wrist/joint3 -120..120, gripper 0..100.
 
 Numbers are accepted as digits or words ("one hundred and thirty five" is
 135) and always win over the table.
