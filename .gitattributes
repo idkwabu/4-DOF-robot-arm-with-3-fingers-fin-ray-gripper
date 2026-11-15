@@ -1,0 +1,3 @@
+3D_model/Dum-E-STEP/v2/*.step filter=lfs diff=lfs merge=lfs -text
+3D_model/Dum-E-STEP/v3/*.step filter=lfs diff=lfs merge=lfs -text
+3D_model/Dum-E-STEP/v2/meshes/*.stl filter=lfs diff=lfs merge=lfs -text
