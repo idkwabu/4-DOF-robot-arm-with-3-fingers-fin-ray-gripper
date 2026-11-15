@@ -1,0 +1,538 @@
+{
+  "schema": 1,
+  "source_signature": "d3e4423bec1a3bfe114c5c00e78cb303cfade08d2e7a4b65e852f693231448f8",
+  "total_estimated_mass_kg": 164.43116230161237,
+  "method": "closed manifold, consistently wound per-solid STL; tetrahedral integration; source CAD density",
+  "warning": "PRELIMINARY ONLY: all source bodies have unverified Steel density 7850 kg/m^3; non-solid bodies excluded; mesh approximation; overlaps may be double counted.",
+  "links": [
+    {
+      "occurrence": "base_link:1",
+      "solid_count": 17,
+      "non_solid_omitted": 23,
+      "used_count": 15,
+      "pending_count": 0,
+      "skipped": [
+        {
+          "body": "Body35",
+          "reason": "inertia principal moments violate triangle inequality",
+          "bounding_box_mass_upper_kg": 0.06440686646804807
+        },
+        {
+          "body": "Body39",
+          "reason": "invalid inertia eigenvalues [-2.07130709e-09 -1.89594470e-09  1.20206007e-10]",
+          "bounding_box_mass_upper_kg": 0.001581142705350949
+        }
+      ],
+      "mass_kg": 81.74495691302074,
+      "com_world_m": [
+        -3.1263113940906155e-10,
+        0.00026556562624224306,
+        -2.020598085371995e-08
+      ],
+      "inertia_com_kg_m2": [
+        [
+          1.5585678962977638,
+          6.129045541401296e-10,
+          -3.3492071887789643e-10
+        ],
+        [
+          6.129045541401296e-10,
+          2.980628391503556,
+          7.940683710962178e-09
+        ],
+        [
+          -3.3492071887789643e-10,
+          7.940683710962178e-09,
+          1.558567835730651
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 1.5585678357287986
+    },
+    {
+      "occurrence": "l0:1",
+      "solid_count": 52,
+      "non_solid_omitted": 1,
+      "used_count": 52,
+      "pending_count": 0,
+      "skipped": [],
+      "mass_kg": 16.470200280557886,
+      "com_world_m": [
+        -0.01329372777879762,
+        0.08727605652097886,
+        -0.0002970359300080458
+      ],
+      "inertia_com_kg_m2": [
+        [
+          0.1311597111067333,
+          0.009555836894178686,
+          -9.205213790084677e-05
+        ],
+        [
+          0.009555836894178686,
+          0.18028363077643114,
+          0.00024437663756370564
+        ],
+        [
+          -9.205213790084677e-05,
+          0.00024437663756370564,
+          0.1270487811080042
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 0.12703997793286823
+    },
+    {
+      "occurrence": "l1:1",
+      "solid_count": 1,
+      "non_solid_omitted": 0,
+      "used_count": 1,
+      "pending_count": 0,
+      "skipped": [],
+      "mass_kg": 25.319803426638018,
+      "com_world_m": [
+        0.02368098653726624,
+        0.349999682183544,
+        3.4475292749453155e-07
+      ],
+      "inertia_com_kg_m2": [
+        [
+          0.6441614518481265,
+          -9.63539634936636e-09,
+          8.003356611934948e-08
+        ],
+        [
+          -9.63539634936636e-09,
+          0.046050558027472814,
+          -3.355094582894083e-07
+        ],
+        [
+          8.003356611934948e-08,
+          -3.355094582894083e-07,
+          0.6161302323990995
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 0.04605055802727513
+    },
+    {
+      "occurrence": "l2:1",
+      "solid_count": 17,
+      "non_solid_omitted": 23,
+      "used_count": 15,
+      "pending_count": 0,
+      "skipped": [
+        {
+          "body": "Body35",
+          "reason": "inertia principal moments violate triangle inequality",
+          "bounding_box_mass_upper_kg": 0.06440686646804815
+        },
+        {
+          "body": "Body39",
+          "reason": "invalid inertia eigenvalues [-2.07139562e-09 -1.89603142e-09  1.20198912e-10]",
+          "bounding_box_mass_upper_kg": 0.0015811344078930612
+        }
+      ],
+      "mass_kg": 23.859623059389158,
+      "com_world_m": [
+        -0.038424475850025896,
+        0.6686680688518758,
+        -3.8137438520890065e-06
+      ],
+      "inertia_com_kg_m2": [
+        [
+          0.32287863757410645,
+          -0.0005618314848122662,
+          1.4303956235738159e-07
+        ],
+        [
+          -0.0005618314848122662,
+          0.04840779680565462,
+          7.0826661486261195e-06
+        ],
+        [
+          1.4303956235738159e-07,
+          7.0826661486261195e-06,
+          0.2934221265531169
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 0.048406646557806576
+    },
+    {
+      "occurrence": "l3_pitch:1",
+      "solid_count": 229,
+      "non_solid_omitted": 23,
+      "used_count": 227,
+      "pending_count": 0,
+      "skipped": [
+        {
+          "body": "Body34",
+          "reason": "inertia principal moments violate triangle inequality",
+          "bounding_box_mass_upper_kg": 0.06440686774769742
+        },
+        {
+          "body": "Body38",
+          "reason": "invalid inertia eigenvalues [-2.07141276e-09 -1.89604738e-09  1.20204163e-10]",
+          "bounding_box_mass_upper_kg": 0.0015811479061720779
+        }
+      ],
+      "mass_kg": 10.858281846698736,
+      "com_world_m": [
+        0.01210676128380799,
+        0.9095595505089225,
+        -0.001585233183824874
+      ],
+      "inertia_com_kg_m2": [
+        [
+          0.045322158679454716,
+          0.0068735249556079354,
+          -1.116122920299167e-05
+        ],
+        [
+          0.0068735249556079354,
+          0.01977568086853788,
+          -0.00011932972150611417
+        ],
+        [
+          -1.116122920299167e-05,
+          -0.00011932972150611417,
+          0.05008443800087525
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 0.018043316170307473
+    },
+    {
+      "occurrence": "l3_roll:1",
+      "solid_count": 31,
+      "non_solid_omitted": 0,
+      "used_count": 28,
+      "pending_count": 0,
+      "skipped": [
+        {
+          "body": "Body18",
+          "reason": "open/nonmanifold/inconsistent edges: 8",
+          "bounding_box_mass_upper_kg": 0.3371245135172642
+        },
+        {
+          "body": "Body19",
+          "reason": "open/nonmanifold/inconsistent edges: 4",
+          "bounding_box_mass_upper_kg": 0.1404695474766941
+        },
+        {
+          "body": "Body28",
+          "reason": "open/nonmanifold/inconsistent edges: 4",
+          "bounding_box_mass_upper_kg": 0.12366859890486746
+        }
+      ],
+      "mass_kg": 5.459489064321751,
+      "com_world_m": [
+        -0.0035094449357509845,
+        1.0522700609978517,
+        -0.0005783073118661941
+      ],
+      "inertia_com_kg_m2": [
+        [
+          0.00978380850134214,
+          -0.0002975616956512759,
+          -0.00010898313958061625
+        ],
+        [
+          -0.0002975616956512759,
+          0.010815447178316846,
+          -0.00011745464496992133
+        ],
+        [
+          -0.00010898313958061625,
+          -0.00011745464496992133,
+          0.015385035685904375
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 0.009700893410295688
+    },
+    {
+      "occurrence": "gripper_carriage:1",
+      "solid_count": 10,
+      "non_solid_omitted": 0,
+      "used_count": 10,
+      "pending_count": 0,
+      "skipped": [],
+      "mass_kg": 0.06686971387614404,
+      "com_world_m": [
+        -7.37566324294396e-09,
+        1.131160421750626,
+        0.00031328657598923376
+      ],
+      "inertia_com_kg_m2": [
+        [
+          6.1043582825663995e-06,
+          1.4084768670726099e-12,
+          -1.2486891945787115e-13
+        ],
+        [
+          1.4084768670726099e-12,
+          1.0882956201152458e-05,
+          7.289951357183317e-09
+        ],
+        [
+          -1.2486891945787115e-13,
+          7.289951357183317e-09,
+          6.412571152894227e-06
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 6.104358282565932e-06
+    },
+    {
+      "occurrence": "gripper_pos_lower:1",
+      "solid_count": 2,
+      "non_solid_omitted": 0,
+      "used_count": 2,
+      "pending_count": 0,
+      "skipped": [],
+      "mass_kg": 0.06096158647040974,
+      "com_world_m": [
+        0.029297047101430874,
+        1.154548090281357,
+        -8.264091978236642e-13
+      ],
+      "inertia_com_kg_m2": [
+        [
+          2.6789118644641418e-05,
+          -3.6685713478505403e-06,
+          6.033230502025199e-16
+        ],
+        [
+          -3.6685713478505403e-06,
+          6.243626012673516e-06,
+          -2.6368573272704645e-15
+        ],
+        [
+          6.033230502025199e-16,
+          -2.6368573272704645e-15,
+          2.5720675121527792e-05
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 5.6082225035573485e-06
+    },
+    {
+      "occurrence": "gripper_neg_lower:1",
+      "solid_count": 2,
+      "non_solid_omitted": 0,
+      "used_count": 2,
+      "pending_count": 0,
+      "skipped": [],
+      "mass_kg": 0.06096158647040974,
+      "com_world_m": [
+        -0.029297047101430874,
+        1.154548090281357,
+        8.264091978236642e-13
+      ],
+      "inertia_com_kg_m2": [
+        [
+          2.6789118644641418e-05,
+          3.6685713478505403e-06,
+          6.033230502025199e-16
+        ],
+        [
+          3.6685713478505403e-06,
+          6.243626012673516e-06,
+          2.6368573272704645e-15
+        ],
+        [
+          6.033230502025199e-16,
+          2.6368573272704645e-15,
+          2.5720675121527792e-05
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 5.6082225035573485e-06
+    },
+    {
+      "occurrence": "gripper_pos_upper:1",
+      "solid_count": 2,
+      "non_solid_omitted": 0,
+      "used_count": 2,
+      "pending_count": 0,
+      "skipped": [],
+      "mass_kg": 0.03277738173152003,
+      "com_world_m": [
+        0.05005135914632966,
+        1.166998086745146,
+        1.1288558428105108e-11
+      ],
+      "inertia_com_kg_m2": [
+        [
+          5.791786844090496e-06,
+          -1.610088291575798e-06,
+          1.6644095875982824e-15
+        ],
+        [
+          -1.610088291575798e-06,
+          2.998967979523312e-06,
+          -7.596699901589918e-16
+        ],
+        [
+          1.6644095875982824e-15,
+          -7.596699901589918e-16,
+          4.85950357988323e-06
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 2.2640999523380397e-06
+    },
+    {
+      "occurrence": "gripper_neg_upper:1",
+      "solid_count": 2,
+      "non_solid_omitted": 0,
+      "used_count": 2,
+      "pending_count": 0,
+      "skipped": [],
+      "mass_kg": 0.03277738173152003,
+      "com_world_m": [
+        -0.05005135914632966,
+        1.166998086745146,
+        -1.1288558428105108e-11
+      ],
+      "inertia_com_kg_m2": [
+        [
+          5.791786844090496e-06,
+          1.610088291575798e-06,
+          1.6644095875982824e-15
+        ],
+        [
+          1.610088291575798e-06,
+          2.998967979523312e-06,
+          7.596699901589918e-16
+        ],
+        [
+          1.6644095875982824e-15,
+          7.596699901589918e-16,
+          4.85950357988323e-06
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 2.2640999523380397e-06
+    },
+    {
+      "occurrence": "gripper_pos_jaw:1",
+      "solid_count": 8,
+      "non_solid_omitted": 0,
+      "used_count": 8,
+      "pending_count": 0,
+      "skipped": [],
+      "mass_kg": 0.22283084775258288,
+      "com_world_m": [
+        0.044994515157738904,
+        1.2116863066528467,
+        9.818864066563022e-05
+      ],
+      "inertia_com_kg_m2": [
+        [
+          9.659316443295465e-05,
+          1.1862664571779072e-05,
+          3.745963392305302e-09
+        ],
+        [
+          1.1862664571779072e-05,
+          2.566837677888313e-05,
+          -1.1874161369851701e-07
+        ],
+        [
+          3.745963392305302e-09,
+          -1.1874161369851701e-07,
+          0.000107358174340909
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 2.3736698914357678e-05
+    },
+    {
+      "occurrence": "gripper_neg_jaw:1",
+      "solid_count": 8,
+      "non_solid_omitted": 0,
+      "used_count": 8,
+      "pending_count": 0,
+      "skipped": [],
+      "mass_kg": 0.2228308612564711,
+      "com_world_m": [
+        -0.04499451526628529,
+        1.2116863050573106,
+        0.00012355610874641227
+      ],
+      "inertia_com_kg_m2": [
+        [
+          9.659373947525547e-05,
+          -1.1862664999323067e-05,
+          4.696689195587936e-08
+        ],
+        [
+          -1.1862664999323067e-05,
+          2.5668943325568967e-05,
+          9.50288258153487e-08
+        ],
+        [
+          4.696689195587936e-08,
+          9.50288258153487e-08,
+          0.00010735818447449411
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 2.3737308676242488e-05
+    },
+    {
+      "occurrence": "gripper_pos_connector:1",
+      "solid_count": 4,
+      "non_solid_omitted": 0,
+      "used_count": 4,
+      "pending_count": 0,
+      "skipped": [],
+      "mass_kg": 0.009399176011324463,
+      "com_world_m": [
+        0.017219412568195955,
+        1.1465329529174262,
+        0.0004575416331681089
+      ],
+      "inertia_com_kg_m2": [
+        [
+          9.14704375312907e-07,
+          -2.857582435932061e-07,
+          -1.512136141804552e-08
+        ],
+        [
+          -2.857582435932061e-07,
+          3.698249197797716e-07,
+          -3.5308928420477034e-08
+        ],
+        [
+          -1.512136141804552e-08,
+          -3.5308928420477034e-08,
+          8.601330034087903e-07
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 2.450480871909492e-07
+    },
+    {
+      "occurrence": "gripper_neg_connector:1",
+      "solid_count": 4,
+      "non_solid_omitted": 0,
+      "used_count": 4,
+      "pending_count": 0,
+      "skipped": [],
+      "mass_kg": 0.009399175685710593,
+      "com_world_m": [
+        -0.017219412575527716,
+        1.1465329529403947,
+        0.00045754183915367087
+      ],
+      "inertia_com_kg_m2": [
+        [
+          9.147044028836226e-07,
+          2.8575825381886153e-07,
+          1.512136136138296e-08
+        ],
+        [
+          2.8575825381886153e-07,
+          3.6982492695966084e-07,
+          -3.5308904439160436e-08
+        ],
+        [
+          1.512136136138296e-08,
+          -3.5308904439160436e-08,
+          8.601330360357609e-07
+        ]
+      ],
+      "min_inertia_eigenvalue_kg_m2": 2.450480929906719e-07
+    }
+  ]
+}

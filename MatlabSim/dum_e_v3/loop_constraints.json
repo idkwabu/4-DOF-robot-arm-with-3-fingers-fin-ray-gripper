@@ -1,0 +1,241 @@
+{
+  "units": "meters; rotations are link-to-joint matrices",
+  "loops": [
+    {
+      "name": "gripper_pos_connector_to_lower_hinge",
+      "type": "revolute",
+      "frame_one": {
+        "link": "gripper_pos_lower_1",
+        "translation_m_in_link_frame": [
+          -0.010580675726125803,
+          0.03210124802247005,
+          1.3552527156068805e-17
+        ],
+        "rotation_matrix_in_link_frame": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ]
+        ]
+      },
+      "frame_two": {
+        "link": "gripper_pos_connector_1",
+        "translation_m_in_link_frame": [
+          0.010235583478163605,
+          0.023900477628314265,
+          -0.0032999999959781043
+        ],
+        "rotation_matrix_in_link_frame": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ]
+        ]
+      },
+      "world_axis": [
+        0.0,
+        0.0,
+        -1.0
+      ]
+    },
+    {
+      "name": "gripper_neg_connector_to_lower_hinge",
+      "type": "revolute",
+      "frame_one": {
+        "link": "gripper_neg_lower_1",
+        "translation_m_in_link_frame": [
+          0.010580675726125768,
+          0.03210124802247005,
+          1.0083080204115191e-17
+        ],
+        "rotation_matrix_in_link_frame": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ]
+        ]
+      },
+      "frame_two": {
+        "link": "gripper_neg_connector_1",
+        "translation_m_in_link_frame": [
+          -0.01023558347816364,
+          0.023900477628314265,
+          -0.003299999995978102
+        ],
+        "rotation_matrix_in_link_frame": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ]
+        ]
+      },
+      "world_axis": [
+        0.0,
+        0.0,
+        -1.0
+      ]
+    },
+    {
+      "name": "gripper_pos_upper_to_jaw_hinge",
+      "type": "revolute",
+      "frame_one": {
+        "link": "gripper_pos_jaw_1",
+        "translation_m_in_link_frame": [
+          0.01541833194267863,
+          -0.0023738239417163687,
+          9.75781955236954e-18
+        ],
+        "rotation_matrix_in_link_frame": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ]
+        ]
+      },
+      "frame_two": {
+        "link": "gripper_pos_upper_1",
+        "translation_m_in_link_frame": [
+          0.014398788731979695,
+          0.03154760362686182,
+          -2.938187887435717e-17
+        ],
+        "rotation_matrix_in_link_frame": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ]
+        ]
+      },
+      "world_axis": [
+        0.0,
+        0.0,
+        -1.0
+      ]
+    },
+    {
+      "name": "gripper_neg_upper_to_jaw_hinge",
+      "type": "revolute",
+      "frame_one": {
+        "link": "gripper_neg_jaw_1",
+        "translation_m_in_link_frame": [
+          -0.0154183319426787,
+          -0.0023738239417163687,
+          9.540979117872439e-18
+        ],
+        "rotation_matrix_in_link_frame": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ]
+        ]
+      },
+      "frame_two": {
+        "link": "gripper_neg_upper_1",
+        "translation_m_in_link_frame": [
+          -0.014398788731979764,
+          0.031547603626861376,
+          -2.3201926491189795e-17
+        ],
+        "rotation_matrix_in_link_frame": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            -1.0
+          ]
+        ]
+      },
+      "world_axis": [
+        0.0,
+        0.0,
+        -1.0
+      ]
+    }
+  ]
+}
