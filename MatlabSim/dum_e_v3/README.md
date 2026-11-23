@@ -14,7 +14,8 @@ follow_dume_v3
 
 By default, the script launches `Dum-E.py`, reads
 `D:\Dum-E\robot_state.json` once, then runs a one-second simulation without
-real-time pacing. The model stays open afterward for inspection. Run
+real-time pacing. It holds each mapped joint at that snapshot's pose for the
+run duration. The model stays open afterward for inspection. Run
 `follow_dume_v3` again after each DUM-E command; pose changes made during a run
 are read on the next run. If the GUI is already open, use
 `follow_dume_v3(false, 1)`. The second argument sets simulated duration in

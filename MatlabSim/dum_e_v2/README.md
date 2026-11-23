@@ -16,7 +16,8 @@ follow_dume_v2
 
 This launches `Dum-E.py` using the repository `.venv`, reads
 `D:\Dum-E\robot_state.json` once, and runs a one-second Simscape simulation
-without real-time pacing. The model stays open afterward for inspection. Run
+without real-time pacing. Each mapped joint is held at that snapshot's pose
+for the run duration. The model stays open afterward for inspection. Run
 `follow_dume_v2` again after each new DUM-E command; changes made during a run
 are picked up by the next run. If the GUI is already open, use
 `follow_dume_v2(false, 1)`. The second argument sets the simulated duration in
