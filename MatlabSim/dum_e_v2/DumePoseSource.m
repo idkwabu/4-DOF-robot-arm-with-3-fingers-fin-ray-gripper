@@ -2,7 +2,7 @@ classdef DumePoseSource < matlab.System
     properties (Nontunable)
         StateFile = ''
         SampleTime = 0.02
-        MoveDuration = 0
+        MoveDuration = 0.8
         GripperClosedDeg = -120
         GripperOpenDeg = 65
     end
@@ -23,9 +23,9 @@ classdef DumePoseSource < matlab.System
 
     methods (Access = protected)
         function setupImpl(obj)
-            if obj.SampleTime <= 0 || obj.MoveDuration < 0
+            if obj.SampleTime <= 0 || obj.MoveDuration <= 0
                 error('DumePoseSource:InvalidTiming', ...
-                    'SampleTime must be positive and MoveDuration nonnegative.');
+                    'SampleTime and MoveDuration must be positive.');
             end
 
             obj.TargetPose = read_dume_pose( ...
@@ -97,7 +97,7 @@ classdef DumePoseSource < matlab.System
         function [position, velocity, acceleration] = evaluateTrajectory(obj, simTime)
             duration = obj.MoveDuration;
             elapsed = simTime - obj.StartTime;
-            if duration == 0 || elapsed >= duration
+            if elapsed >= duration
                 position = obj.TargetPose;
                 velocity = zeros(6,1);
                 acceleration = zeros(6,1);
