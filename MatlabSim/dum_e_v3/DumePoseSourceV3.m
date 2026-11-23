@@ -2,7 +2,7 @@ classdef DumePoseSourceV3 < matlab.System
     properties (Nontunable)
         StateFile = ''
         SampleTime = 0.02
-        MoveDuration = 0.8
+        MoveDuration = 0.2
         GripperClosedMeters = -0.009
         GripperOpenMeters = 0.010
     end

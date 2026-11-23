@@ -3,7 +3,7 @@
 This folder contains the v3 Mk19 Simscape export and MATLAB tools that read
 poses written by the repository's `Dum-E.py` GUI.
 
-## Run one simulation per DUM-E command
+## Live control from DUM-E
 
 In MATLAB, run:
 
@@ -12,19 +12,22 @@ cd('D:\Dum-E\MatlabSim\dum_e_v3')
 follow_dume_v3
 ```
 
-By default, the script launches `Dum-E.py`, reads
-`D:\Dum-E\robot_state.json` once, then runs a one-second simulation without
-real-time pacing. It holds each mapped joint at that snapshot's pose for the
-run duration. The model stays open afterward for inspection. Run
-`follow_dume_v3` again after each DUM-E command; pose changes made during a run
-are read on the next run. If the GUI is already open, use
-`follow_dume_v3(false, 1)`. The second argument sets simulated duration in
-seconds. The one-shot runner disables gravity because the preliminary passive
-gripper linkage may lose its loop closure under gravity; the importer itself
-still sets Y-up gravity to `[0 -9.80665 0] m/s^2`.
+By default, the script launches `Dum-E.py`, opens the Simulink model and
+Simscape Mechanics Explorer, then follows
+`D:\Dum-E\robot_state.json` in one continuous real-time-paced simulation. New
+poses are sampled every 20 ms, smoothly retargeted over 0.2 seconds, and do not
+restart the simulation. The live follower disables gravity because the
+preliminary passive gripper linkage may lose its loop closure under gravity;
+the importer itself still sets Y-up gravity to `[0 -9.80665 0] m/s^2`.
+Press Ctrl+C in MATLAB to stop.
 
-The former continuous follower is retained as `follow_dume_v3_realtime`, but
-is not the recommended mode while the gripper closure issue remains.
+If DUM-E is already open, use `follow_dume_v3(false)`. The optional second
+argument sets simulation duration, and the third adjusts smoothing, e.g.
+`follow_dume_v3(false, 120, 0.1)`. The default run is long-running.
+
+For a separate pose snapshot, run `follow_dume_v3_snapshot(false, 1)`. It
+reads the state once, simulates it without real-time pacing, and does not
+follow changes during that run.
 
 The runner imports the Simscape model and restores the four gripper loop
 closures through `import_dume_simscape` if no saved
@@ -57,8 +60,8 @@ travel, not an identical finger motion.
 
 - `import_dume_simscape.m` imports the v3 URDF, restores CAD loop closures,
   and sets gravity for the Y-up model.
-- `follow_dume_v3.m` reads one pose snapshot and runs a finite simulation.
-- `follow_dume_v3_realtime.m` retains the continuous follower.
+- `follow_dume_v3.m` opens the GUI and continuously follows DUM-E.
+- `follow_dume_v3_snapshot.m` reads one pose and runs a finite simulation.
 - `DumePoseSourceV3.m` polls the pose file and generates trajectories for the
   continuous follower.
 - `read_dume_pose_v3.m` validates the JSON pose and applies the mapping.
