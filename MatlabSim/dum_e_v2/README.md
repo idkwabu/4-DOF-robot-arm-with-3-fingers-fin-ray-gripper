@@ -17,17 +17,18 @@ follow_dume_v2
 This launches `Dum-E.py` using the repository `.venv`, opens the Simulink model
 and Simscape Mechanics Explorer, then follows
 `D:\Dum-E\robot_state.json` in one continuous simulation. It waits at the
-current pose while the file is unchanged, then runs unpaced when a new pose
-arrives; each move is smoothly retargeted over 0.2 simulated seconds without
-restarting the simulation. The live follower disables gravity because the
+current pose while the file is unchanged, then paces each new move for visible
+animation over 0.5 simulated seconds without restarting the simulation. State
+changes during a move retarget the trajectory smoothly. The live follower
+disables gravity because the
 preliminary passive gripper linkage can lose its loop closure under gravity;
 the importer itself still sets Y-up gravity to `[0 -9.80665 0] m/s^2`.
 Press **Ctrl+C** in MATLAB to stop.
 
 If DUM-E is already open, use `follow_dume_v2(false)`. The optional second
-argument sets simulation duration, and the third adjusts smoothing, e.g.
-`follow_dume_v2(false, 120, 0.1)`. The default run waits for state changes
-until stopped.
+argument sets simulation duration, and the third adjusts animation duration,
+e.g. `follow_dume_v2(false, 120, 0.5)`. The default run waits for state
+changes until stopped.
 
 ### Pose mapping
 
