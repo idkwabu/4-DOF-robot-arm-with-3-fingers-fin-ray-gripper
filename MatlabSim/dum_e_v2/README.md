@@ -17,7 +17,7 @@ follow_dume_v2
 By default, this launches `Dum-E.py` using the repository `.venv`, then runs
 one continuous, real-time-paced Simscape simulation. DUM-E writes its current
 pose to `D:\Dum-E\robot_state.json`; MATLAB reads that file while the
-simulation is running. New poses are applied immediately at the 100 Hz sampling
+simulation is running. New poses are applied immediately at the 50 Hz sampling
 rate and do not restart the simulation. The live follower disables
 gravity because the preliminary passive gripper linkage can lose its loop
 closure under gravity.
@@ -44,8 +44,8 @@ positions in radians:
 | `gripper` (0-100%) | Linear mapping from -120 deg (closed) to +65 deg (open) |
 
 The shoulder joint limits are adjusted to -180..0 deg to preserve DUM-E's full
-joint1 range after the offset. `DumePoseSource.m` polls the state every 0.01 s
-(100 Hz) and generates position, velocity, and acceleration commands. By
+joint1 range after the offset. `DumePoseSource.m` polls the state every 0.02 s
+(50 Hz) and generates position, velocity, and acceleration commands. By
 default the position is updated immediately; a positive move duration enables
 quintic smoothing.
 
