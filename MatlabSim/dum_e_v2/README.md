@@ -5,7 +5,7 @@ setting a pose, or following commands from the DUM-E Python GUI. The imported
 model uses the Fusion coordinate convention: **Y is up**, with gravity set to
 `[0 -9.80665 0] m/s^2`.
 
-## Live control from DUM-E
+## Run one simulation per DUM-E command
 
 From MATLAB:
 
@@ -14,18 +14,20 @@ cd('D:\Dum-E\MatlabSim\dum_e_v2')
 follow_dume_v2
 ```
 
-By default, this launches `Dum-E.py` using the repository `.venv`, then runs
-one continuous, real-time-paced Simscape simulation. DUM-E writes its current
-pose to `D:\Dum-E\robot_state.json`; MATLAB reads that file while the
-simulation is running. New poses are interpolated over 0.8 seconds and do not
-restart the simulation. The live follower disables gravity because the
-preliminary passive gripper linkage can lose its loop closure under gravity.
-The importer itself still sets Y-up gravity to `[0 -9.80665 0] m/s^2`.
-Press **Ctrl+C** in MATLAB to stop.
+This launches `Dum-E.py` using the repository `.venv`, reads
+`D:\Dum-E\robot_state.json` once, and runs a one-second Simscape simulation
+without real-time pacing. The model stays open afterward for inspection. Run
+`follow_dume_v2` again after each new DUM-E command; changes made during a run
+are picked up by the next run. If the GUI is already open, use
+`follow_dume_v2(false, 1)`. The second argument sets the simulated duration in
+seconds.
 
-If DUM-E is already open, use `follow_dume_v2(false)`. A finite run can be
-requested with `follow_dume_v2(false, 10)`, where the second argument is the
-simulation stop time in seconds.
+The one-shot runner disables gravity because the preliminary passive gripper
+linkage can lose its loop closure under gravity. The importer itself still
+sets Y-up gravity to `[0 -9.80665 0] m/s^2`.
+
+The former continuous follower is retained as `follow_dume_v2_realtime`, but
+is not the recommended mode while the gripper closure issue remains.
 
 ### Pose mapping
 
@@ -42,8 +44,7 @@ positions in radians:
 | `gripper` (0-100%) | Linear mapping from -120 deg (closed) to +65 deg (open) |
 
 The shoulder joint limits are adjusted to -180..0 deg to preserve DUM-E's full
-joint1 range after the offset. `DumePoseSource.m` polls the state every 0.02 s
-(50 Hz) and generates smooth position, velocity, and acceleration commands.
+joint1 range after the offset.
 
 ## Other MATLAB entry points
 
@@ -79,8 +80,9 @@ time-based motion or read DUM-E's state file.
 | `loop_constraints.json` | CAD frames used to restore three gripper linkage closures |
 | `cad_inertia_estimates.json` | Per-link details and caveats for estimated inertias |
 | `import_dume_simscape.m` | Imports the URDF and adds the gripper closure joints |
-| `follow_dume_v2.m` | Configures and runs the continuous DUM-E-controlled simulation |
-| `DumePoseSource.m` | Polls the pose file and generates smooth joint trajectories |
+| `follow_dume_v2.m` | Reads one pose snapshot and runs a finite simulation |
+| `follow_dume_v2_realtime.m` | Retained continuous DUM-E follower |
+| `DumePoseSource.m` | Pose polling and trajectory generation for the continuous follower |
 | `read_dume_pose.m` | Validates and maps DUM-E pose values to Simscape radians |
 | `run_dume_v2_simulation.m` | Sets a one-time static joint target pose |
 | `README_SIMSCAPE.txt` | Original export notes and model caveats |
@@ -88,8 +90,7 @@ time-based motion or read DUM-E's state file.
 | `dum_e_v2_generated.avi` | Previously generated model animation |
 
 MATLAB may also create `dum_e_simscape_generated.slx` and a `slprj` cache when
-the importer or live follower runs. The live follower loads the generated
-model if it exists and rebuilds its DUM-E input blocks.
+the importer or a runner executes.
 
 ## Model limitations
 
@@ -100,5 +101,5 @@ inaccurate. Joint effort and velocity values of 100 are schema placeholders,
 not actuator ratings. Verify masses, limits, gripper closure, collisions, and
 motion against the physical arm before trusting dynamic results. This folder
 controls only the MATLAB simulation; it does not send commands to robot
-hardware. The live follower is intended for visual pose tracking, not
+hardware. The one-shot runner is intended for pose visualization, not
 gravity-loaded dynamics.

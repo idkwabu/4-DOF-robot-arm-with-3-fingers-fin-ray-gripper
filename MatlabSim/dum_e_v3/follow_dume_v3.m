@@ -1,15 +1,14 @@
 function follow_dume_v3(startGui, stopTime)
-%FOLLOW_DUME_V3 Run one continuous Simscape simulation driven by DUM-E.
-% Run in MATLAB with:
+%FOLLOW_DUME_V3 Simulate one snapshot of the current DUM-E v3 pose.
+% Run once after a DUM-E command; rerun after the next command:
 %   cd('D:\Dum-E\MatlabSim\dum_e_v3')
-%   follow_dume_v3
-% The default run lasts a long time; press Ctrl+C in MATLAB to stop it.
+%   follow_dume_v3(false, 1)
 
 if nargin < 1
     startGui = true;
 end
 if nargin < 2
-    stopTime = 1e6;
+    stopTime = 1;
 end
 validateattributes(startGui, {'logical','numeric'}, {'scalar'});
 validateattributes(stopTime, {'numeric'}, {'scalar','real','positive','finite'});
@@ -46,52 +45,11 @@ if startGui
 end
 
 waitForStateFile(stateFile, 30);
-initialPose = read_dume_pose_v3( ...
+pose = read_dume_pose_v3( ...
     stateFile, gripperClosedMeters, gripperOpenMeters);
-
-modelName = 'dum_e_simscape_generated';
-modelFile = fullfile(modelFolder, [modelName '.slx']);
-if bdIsLoaded(modelName)
-    error('Close the existing %s model before starting the DUM-E follower.', modelName);
-elseif isfile(modelFile)
-    load_system(modelFile);
-    model = modelName;
-else
-    model = import_dume_simscape();
-end
-modelCleanup = onCleanup(@() closeImportedModel(model));
-
-set_param([model '/MechanismConfiguration'], 'GravityVector', '[0 0 0]');
-configureContinuousInputs(model, jointNames, initialPose, stateFile, ...
-    gripperClosedMeters, gripperOpenMeters);
-set_param(model, ...
-    'StopTime', sprintf('%.9g', stopTime), ...
-    'EnablePacing', 'on', ...
-    'PacingRate', '1', ...
-    'MaxStep', '0.01');
-
-fprintf(['Starting one continuous Simscape run; DUM-E poses are sampled from:\n%s\n' ...
-    'Gripper 0-100%% maps to slider travel %.1f to %.1f mm.\n' ...
-    'Gravity is disabled for stable live pose tracking. The simulation is paced at real time.\n' ...
-    'Press Ctrl+C in MATLAB to stop.\n'], ...
-    stateFile, gripperClosedMeters*1000, gripperOpenMeters*1000);
-sim(model);
-end
-
-function waitForStateFile(stateFile, timeoutSeconds)
-started = tic;
-while ~isfile(stateFile)
-    if toc(started) >= timeoutSeconds
-        error('DUM-E did not create its pose file: %s', stateFile);
-    end
-    pause(0.1);
-end
-end
-
-function configureContinuousInputs( ...
-        model, jointNames, initialPose, stateFile, ...
-        gripperClosedMeters, gripperOpenMeters)
+model = getDumeModel(modelFolder);
 removeOldPoseInputs(model, jointNames);
+set_param([model '/MechanismConfiguration'], 'GravityVector', '[0 0 0]');
 
 for k = 1:numel(jointNames)
     joint = [model '/' jointNames{k}];
@@ -107,106 +65,62 @@ for k = 1:numel(jointNames)
             'UpperLimitBound', '0', ...
             'UpperLimitBoundUnits', 'rad');
     end
-end
-set_param(model, 'SimulationCommand', 'update');
-
-for k = 1:numel(jointNames)
-    joint = [model '/' jointNames{k}];
     units = 'rad';
     if strcmp(jointNames{k}, 'gripper_slide')
         units = 'm';
     end
     set_param(joint, ...
-        'MotionActuationMode', 'InputMotion', ...
-        'TorqueActuationMode', 'ComputedTorque', ...
         'PositionTargetSpecify', 'on', ...
         'PositionTargetPriority', 'High', ...
-        'PositionTargetValue', sprintf('%.16g', initialPose(k)), ...
+        'PositionTargetValue', sprintf('%.16g', pose(k)), ...
         'PositionTargetValueUnits', units);
 end
+
 set_param(model, 'SimulationCommand', 'update');
+set_param(model, ...
+    'StopTime', sprintf('%.9g', stopTime), ...
+    'EnablePacing', 'off', ...
+    'MaxStep', '0.01');
 
-add_block('simulink/User-Defined Functions/MATLAB System', ...
-    [model '/DumeLivePoseSource'], ...
-    'Position', [700 80 850 150]);
-set_param([model '/DumeLivePoseSource'], ...
-    'System', 'DumePoseSourceV3', ...
-    'SimulateUsing', 'Interpreted execution', ...
-    'StateFile', stateFile, ...
-    'SampleTime', '0.02', ...
-    'MoveDuration', '0.8', ...
-    'GripperClosedMeters', sprintf('%.16g', gripperClosedMeters), ...
-    'GripperOpenMeters', sprintf('%.16g', gripperOpenMeters));
-
-add_block('simulink/Sources/Clock', [model '/DumeLiveClock'], ...
-    'Position', [570 90 600 120]);
-add_block('simulink/Signal Routing/Demux', [model '/DumeSplitPosition'], ...
-    'Outputs', '6', 'Position', [890 75 895 190]);
-add_block('simulink/Signal Routing/Demux', [model '/DumeSplitVelocity'], ...
-    'Outputs', '6', 'Position', [890 215 895 330]);
-add_block('simulink/Signal Routing/Demux', [model '/DumeSplitAcceleration'], ...
-    'Outputs', '6', 'Position', [890 355 895 470]);
-add_block('simulink/Discrete/Unit Delay', [model '/DumeHoldPosition'], ...
-    'Position', [925 90 965 120]);
-add_block('simulink/Discrete/Unit Delay', [model '/DumeHoldVelocity'], ...
-    'Position', [925 230 965 260]);
-add_block('simulink/Discrete/Unit Delay', [model '/DumeHoldAcceleration'], ...
-    'Position', [925 370 965 400]);
-set_param([model '/DumeHoldPosition'], ...
-    'InitialCondition', mat2str(initialPose, 16));
-set_param([model '/DumeHoldVelocity'], 'InitialCondition', 'zeros(6,1)');
-set_param([model '/DumeHoldAcceleration'], 'InitialCondition', 'zeros(6,1)');
-
-clockPorts = get_param([model '/DumeLiveClock'], 'PortHandles');
-sourcePorts = get_param([model '/DumeLivePoseSource'], 'PortHandles');
-add_line(model, clockPorts.Outport(1), sourcePorts.Inport(1), 'autorouting', 'on');
-
-holdNames = {'DumeHoldPosition','DumeHoldVelocity','DumeHoldAcceleration'};
-splitNames = {'DumeSplitPosition','DumeSplitVelocity','DumeSplitAcceleration'};
-for k = 1:3
-    holdPath = [model '/' holdNames{k}];
-    splitPath = [model '/' splitNames{k}];
-    holdPorts = get_param(holdPath, 'PortHandles');
-    splitPorts = get_param(splitPath, 'PortHandles');
-    add_line(model, sourcePorts.Outport(k), holdPorts.Inport(1), 'autorouting', 'on');
-    add_line(model, holdPorts.Outport(1), splitPorts.Inport(1), 'autorouting', 'on');
+fprintf(['Reading one pose snapshot from:\n%s\n' ...
+    'Simulating this pose for %.3g seconds without real-time pacing.\n' ...
+    'Run follow_dume_v3 again after the next DUM-E command.\n'], ...
+    stateFile, stopTime);
+sim(model);
+fprintf('Snapshot simulation finished; the model remains open for inspection.\n');
 end
 
-q = get_param([model '/DumeSplitPosition'], 'PortHandles');
-qd = get_param([model '/DumeSplitVelocity'], 'PortHandles');
-qdd = get_param([model '/DumeSplitAcceleration'], 'PortHandles');
-for k = 1:numel(jointNames)
-    jointName = jointNames{k};
-    y = 90 + 120*(k-1);
-    converter = [model '/dumeUnits_' jointName];
-    units = 'rad';
-    if strcmp(jointName, 'gripper_slide')
-        units = 'm';
+function model = getDumeModel(modelFolder)
+modelName = 'dum_e_simscape_generated';
+if bdIsLoaded(modelName)
+    if ~strcmp(get_param(modelName, 'SimulationStatus'), 'stopped')
+        error('Stop the current %s simulation before running a pose snapshot.', modelName);
     end
-    add_block('nesl_utility/Simulink-PS Converter', converter, ...
-        'Unit', units, ...
-        'FilteringAndDerivatives', 'provide', ...
-        'UdotUserProvided', '2', ...
-        'Position', [1010 y 1085 y+55]);
-
-    converterPorts = get_param(converter, 'PortHandles');
-    jointPorts = get_param([model '/' jointName], 'PortHandles');
-    add_line(model, q.Outport(k), converterPorts.Inport(1), 'autorouting', 'on');
-    add_line(model, qd.Outport(k), converterPorts.Inport(2), 'autorouting', 'on');
-    add_line(model, qdd.Outport(k), converterPorts.Inport(3), 'autorouting', 'on');
-    add_line(model, converterPorts.RConn(1), jointPorts.LConn(2), 'autorouting', 'on');
+    model = modelName;
+elseif isfile(fullfile(modelFolder, [modelName '.slx']))
+    load_system(fullfile(modelFolder, [modelName '.slx']));
+    model = modelName;
+else
+    model = import_dume_simscape();
 end
-set_param(model, 'SimulationCommand', 'update');
+end
+
+function waitForStateFile(stateFile, timeoutSeconds)
+started = tic;
+while ~isfile(stateFile)
+    if toc(started) >= timeoutSeconds
+        error('DUM-E did not create its pose file: %s', stateFile);
+    end
+    pause(0.1);
+end
 end
 
 function removeOldPoseInputs(model, jointNames)
 oldNames = {'DumeLivePoseSource','DumeLiveClock','DumeSplitPosition', ...
     'DumeSplitVelocity','DumeSplitAcceleration','DumeHoldPosition', ...
     'DumeHoldVelocity','DumeHoldAcceleration'};
-oldNames(end+1:end+4*numel(jointNames)) = cell(1,4*numel(jointNames));
 for k = 1:numel(jointNames)
-    first = 8 + 4*(k-1) + 1;
-    oldNames(first:first+3) = { ...
+    oldNames(end+1:end+4) = { ...
         ['dumePosition_' jointNames{k}], ...
         ['dumeVelocity_' jointNames{k}], ...
         ['dumeAcceleration_' jointNames{k}], ...
@@ -218,11 +132,5 @@ for k = 1:numel(oldNames)
     if any(strcmp(blocks, oldNames{k}))
         delete_block([model '/' oldNames{k}]);
     end
-end
-end
-
-function closeImportedModel(model)
-if bdIsLoaded(model)
-    close_system(model, 0);
 end
 end
