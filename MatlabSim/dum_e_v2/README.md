@@ -17,15 +17,17 @@ follow_dume_v2
 By default, this launches `Dum-E.py` using the repository `.venv`, then runs
 one continuous, real-time-paced Simscape simulation. DUM-E writes its current
 pose to `D:\Dum-E\robot_state.json`; MATLAB reads that file while the
-simulation is running. New poses are interpolated over 0.8 seconds and do not
-restart the simulation. The live follower disables gravity because the
-preliminary passive gripper linkage can lose its loop closure under gravity.
+simulation is running. New poses are applied immediately at the 50 Hz sampling
+rate and do not restart the simulation. The live follower disables
+gravity because the preliminary passive gripper linkage can lose its loop
+closure under gravity.
 The importer itself still sets Y-up gravity to `[0 -9.80665 0] m/s^2`.
 Press **Ctrl+C** in MATLAB to stop.
 
 If DUM-E is already open, use `follow_dume_v2(false)`. A finite run can be
 requested with `follow_dume_v2(false, 10)`, where the second argument is the
-simulation stop time in seconds.
+simulation stop time in seconds. To smooth changes, pass a transition duration
+in seconds as the third argument, e.g. `follow_dume_v2(false, 10, 0.1)`.
 
 ### Pose mapping
 
@@ -43,7 +45,9 @@ positions in radians:
 
 The shoulder joint limits are adjusted to -180..0 deg to preserve DUM-E's full
 joint1 range after the offset. `DumePoseSource.m` polls the state every 0.02 s
-(50 Hz) and generates smooth position, velocity, and acceleration commands.
+(50 Hz) and generates position, velocity, and acceleration commands. By
+default the position is updated immediately; a positive move duration enables
+quintic smoothing.
 
 ## Other MATLAB entry points
 

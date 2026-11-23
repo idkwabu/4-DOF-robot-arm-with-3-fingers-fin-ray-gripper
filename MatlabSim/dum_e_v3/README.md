@@ -17,12 +17,16 @@ and runs one real-time-paced Simscape simulation. Use `follow_dume_v3(false)`
 if the GUI is already running, or pass a finite stop time in seconds, for
 example `follow_dume_v3(true, 120)`. Stop the default long-running session with
 Ctrl+C in MATLAB. The live follower disables gravity for stable pose tracking;
-the importer itself still sets Y-up gravity to `[0 -9.80665 0] m/s^2`.
+the importer itself still sets Y-up gravity to `[0 -9.80665 0] m/s^2`. By
+default, pose changes are applied immediately at the 50 Hz sampling rate; use
+the optional third argument to add quintic smoothing, e.g.
+`follow_dume_v3(false, 120, 0.1)`.
 
 The GUI writes `D:\Dum-E\robot_state.json`. The MATLAB source samples it every
-20 ms and retargets a smooth 0.8-second quintic trajectory without restarting
-the simulation. The script imports the Simscape model and restores the four
-gripper loop closures through `import_dume_simscape` when no saved
+20 ms and applies the latest pose without restarting the simulation. A
+positive transition duration enables smooth quintic retargeting. The script
+imports the Simscape model and restores the four gripper loop closures through
+`import_dume_simscape` when no saved
 `dum_e_simscape_generated.slx` model is available.
 
 ## Pose mapping

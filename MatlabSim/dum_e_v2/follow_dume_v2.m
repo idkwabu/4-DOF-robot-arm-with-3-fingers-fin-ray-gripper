@@ -1,8 +1,10 @@
-function follow_dume_v2(startGui, stopTime)
+function follow_dume_v2(startGui, stopTime, moveDuration)
 %FOLLOW_DUME_V2 Run one continuous Simscape simulation driven by DUM-E.
 % Run in MATLAB with:
 %   cd('D:\Dum-E\MatlabSim\dum_e_v2')
 %   follow_dume_v2
+% Pass a third argument to adjust smoothing duration, e.g.
+%   follow_dume_v2(false, 120, 0.1)
 % The default run lasts a long time; press Ctrl+C in MATLAB to stop it.
 
 if nargin < 1
@@ -11,8 +13,12 @@ end
 if nargin < 2
     stopTime = 1e6;
 end
+if nargin < 3
+    moveDuration = 0;
+end
 validateattributes(startGui, {'logical','numeric'}, {'scalar'});
 validateattributes(stopTime, {'numeric'}, {'scalar','real','positive','finite'});
+validateattributes(moveDuration, {'numeric'}, {'scalar','real','nonnegative','finite'});
 
 gripperClosedDeg = -120;
 gripperOpenDeg = 65;
@@ -62,18 +68,24 @@ modelCleanup = onCleanup(@() closeImportedModel(model));
 
 set_param([model '/MechanismConfiguration'], 'GravityVector', '[0 0 0]');
 configureContinuousInputs(model, jointNames, initialPose, stateFile, ...
-    gripperClosedDeg, gripperOpenDeg);
+    gripperClosedDeg, gripperOpenDeg, moveDuration);
 set_param(model, ...
     'StopTime', sprintf('%.9g', stopTime), ...
     'EnablePacing', 'on', ...
     'PacingRate', '1', ...
     'MaxStep', '0.01');
 
+if moveDuration == 0
+    responseMode = 'Targets are applied immediately at 50 Hz.';
+else
+    responseMode = sprintf('Targets are smoothed over %.2f s.', moveDuration);
+end
 fprintf(['Starting one continuous Simscape run; DUM-E poses are sampled from:\n%s\n' ...
     'Gripper 0-100%% maps to the v2 servo range %.0f to %.0f degrees.\n' ...
-    'Gravity is disabled for stable live pose tracking. The simulation is paced at real time.\n' ...
+    '%s Gravity is disabled for stable live pose tracking.\n' ...
+    'The simulation is paced at real time.\n' ...
     'Press Ctrl+C in MATLAB to stop.\n'], ...
-    stateFile, gripperClosedDeg, gripperOpenDeg);
+    stateFile, gripperClosedDeg, gripperOpenDeg, responseMode);
 sim(model);
 end
 
@@ -88,7 +100,8 @@ end
 end
 
 function configureContinuousInputs( ...
-        model, jointNames, initialPose, stateFile, gripperClosedDeg, gripperOpenDeg)
+        model, jointNames, initialPose, stateFile, ...
+        gripperClosedDeg, gripperOpenDeg, moveDuration)
 removeOldPoseInputs(model, jointNames);
 
 for k = 1:numel(jointNames)
@@ -128,7 +141,7 @@ set_param([model '/DumeLivePoseSource'], ...
     'SimulateUsing', 'Interpreted execution', ...
     'StateFile', stateFile, ...
     'SampleTime', '0.02', ...
-    'MoveDuration', '0.8', ...
+    'MoveDuration', sprintf('%.16g', moveDuration), ...
     'GripperClosedDeg', sprintf('%.16g', gripperClosedDeg), ...
     'GripperOpenDeg', sprintf('%.16g', gripperOpenDeg));
 
@@ -140,30 +153,16 @@ add_block('simulink/Signal Routing/Demux', [model '/DumeSplitVelocity'], ...
     'Outputs', '6', 'Position', [890 215 895 330]);
 add_block('simulink/Signal Routing/Demux', [model '/DumeSplitAcceleration'], ...
     'Outputs', '6', 'Position', [890 355 895 470]);
-add_block('simulink/Discrete/Unit Delay', [model '/DumeHoldPosition'], ...
-    'Position', [925 90 965 120]);
-add_block('simulink/Discrete/Unit Delay', [model '/DumeHoldVelocity'], ...
-    'Position', [925 230 965 260]);
-add_block('simulink/Discrete/Unit Delay', [model '/DumeHoldAcceleration'], ...
-    'Position', [925 370 965 400]);
-set_param([model '/DumeHoldPosition'], ...
-    'InitialCondition', mat2str(initialPose, 16));
-set_param([model '/DumeHoldVelocity'], 'InitialCondition', 'zeros(6,1)');
-set_param([model '/DumeHoldAcceleration'], 'InitialCondition', 'zeros(6,1)');
 
 clockPorts = get_param([model '/DumeLiveClock'], 'PortHandles');
 sourcePorts = get_param([model '/DumeLivePoseSource'], 'PortHandles');
 add_line(model, clockPorts.Outport(1), sourcePorts.Inport(1), 'autorouting', 'on');
 
-holdNames = {'DumeHoldPosition','DumeHoldVelocity','DumeHoldAcceleration'};
 splitNames = {'DumeSplitPosition','DumeSplitVelocity','DumeSplitAcceleration'};
 for k = 1:3
-    holdPath = [model '/' holdNames{k}];
     splitPath = [model '/' splitNames{k}];
-    holdPorts = get_param(holdPath, 'PortHandles');
     splitPorts = get_param(splitPath, 'PortHandles');
-    add_line(model, sourcePorts.Outport(k), holdPorts.Inport(1), 'autorouting', 'on');
-    add_line(model, holdPorts.Outport(1), splitPorts.Inport(1), 'autorouting', 'on');
+    add_line(model, sourcePorts.Outport(k), splitPorts.Inport(1), 'autorouting', 'on');
 end
 
 q = get_param([model '/DumeSplitPosition'], 'PortHandles');
