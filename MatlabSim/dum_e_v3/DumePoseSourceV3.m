@@ -33,14 +33,18 @@ classdef DumePoseSourceV3 < matlab.System
             obj.StartPose = obj.TargetPose;
             obj.StartVelocity = zeros(6,1);
             obj.StartAcceleration = zeros(6,1);
-            obj.StartTime = 0;
+            obj.StartTime = -obj.MoveDuration;
             updateCoefficients(obj);
         end
 
         function [position, velocity, acceleration] = stepImpl(obj, simTime)
             [position, velocity, acceleration] = evaluateTrajectory(obj, simTime);
-            newTarget = read_dume_pose_v3( ...
-                obj.StateFile, obj.GripperClosedMeters, obj.GripperOpenMeters);
+            if simTime - obj.StartTime >= obj.MoveDuration
+                newTarget = waitForTargetChange(obj);
+            else
+                newTarget = read_dume_pose_v3( ...
+                    obj.StateFile, obj.GripperClosedMeters, obj.GripperOpenMeters);
+            end
             if any(abs(newTarget - obj.TargetPose) > 1e-10)
                 obj.StartPose = position;
                 obj.StartVelocity = velocity;
@@ -83,6 +87,17 @@ classdef DumePoseSourceV3 < matlab.System
     end
 
     methods (Access = private)
+        function newTarget = waitForTargetChange(obj)
+            while true
+                newTarget = read_dume_pose_v3( ...
+                    obj.StateFile, obj.GripperClosedMeters, obj.GripperOpenMeters);
+                if any(abs(newTarget - obj.TargetPose) > 1e-10)
+                    return;
+                end
+                pause(obj.SampleTime);
+            end
+        end
+
         function updateCoefficients(obj)
             duration = obj.MoveDuration;
             displacement = obj.TargetPose - obj.StartPose;
