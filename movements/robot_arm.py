@@ -18,8 +18,8 @@ around +Z but cannot tilt L0. joint1 tilts L1, joint2 tilts L2 relative
 to L1, and joint3 tilts L3 relative to L2.
 The grip point is the on-axis centroid of the three fingertips, so forward
 and inverse kinematics target the object centre.
-The fifth joint, gripper_roll, rotates the finger layout around the tool axis
-without changing the grip-point position.
+The fifth joint, joint4 (formerly gripper_roll), rotates the finger layout
+around the tool axis without changing the grip-point position.
 
 The radial projection is signed. A folded arm can project behind the base,
 in which case an IK solution may return a base azimuth shifted by 180 degrees.
@@ -35,6 +35,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Sequence, Tuple
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from robot_contract import JOINT_LIMITS
@@ -164,7 +166,12 @@ class JointAngles:
     joint1: float           # link 1 in the radial-Z plane            [deg]
     joint2: float           # link 2 relative to link 1               [deg]
     joint3: float           # link 3 relative to link 2               [deg]
-    gripper_roll: float = 0.0  # gripper rotation about the tool axis   [deg]
+    joint4: float = 0.0     # wrist/tool roll about the tool axis      [deg]
+
+    @property
+    def gripper_roll(self) -> float:
+        """Backward-compatible name for the joint4 roll angle."""
+        return self.joint4
 
 
 # Animation start pose: link 1 and link 2 straight up.  Note the gripper stem
@@ -194,6 +201,11 @@ class FingerGripper:
     opening: float
     finger_paths: Tuple[Tuple[CartesianPoint, ...], ...] = ()
     gripper_roll: float = 0.0
+
+    @property
+    def joint4(self) -> float:
+        """The wrist/tool roll angle, named as a joint."""
+        return self.gripper_roll
 
     @property
     def wrist(self) -> CartesianPoint:
@@ -419,7 +431,7 @@ def _gripper_pose(
     config: RobotConfig, opening: float | None = None, gripper_roll: float = 0.0,
 ) -> FingerGripper:
     """Finger-gripper geometry for angles in RADIANS."""
-    _check_finite(gripper_roll, "gripper_roll (deg)")
+    _check_finite(gripper_roll, "joint4 (deg)")
     _, joint1_pos, joint2_pos, joint3_pos, gripper_mount = _fk_parts(
         theta_base, joint1, joint2, joint3_angle, config
     )
@@ -650,7 +662,7 @@ def _ik_rad(
         joint1=_wrap_angle(joint1),
         joint2=_wrap_angle(joint2),
         joint3=joint3,  # pass through the given joint3
-        gripper_roll=gripper_roll,
+        joint4=gripper_roll,
     )
     # Final propagation guard: never emit NaN/Inf silently.
     for angle in (joint_angles.theta_base, joint_angles.joint1, joint_angles.joint2):
@@ -745,7 +757,7 @@ def _ik_stem_world(
         joint1=_to_deg(_wrap_angle(joint1)),
         joint2=_to_deg(_wrap_angle(joint2)),
         joint3=_to_deg(_wrap_angle(joint3)),
-        gripper_roll=gripper_roll,
+        joint4=gripper_roll,
     )
     for angle in (
         joint_angles.theta_base,
@@ -794,7 +806,7 @@ def inverse_kinematics(
         must span ``|L1 - L2| <= d <= L1 + L2`` after the stem offset is
         removed from the target.
     """
-    _check_finite(gripper_roll, "gripper_roll (deg)")
+    _check_finite(gripper_roll, "joint4 (deg)")
     if isinstance(joint3, str):
         mode = joint3.strip().lower()
         if mode == "auto":
@@ -817,7 +829,7 @@ def inverse_kinematics(
         joint1=_to_deg(angles_rad.joint1),
         joint2=_to_deg(angles_rad.joint2),
         joint3=joint3,
-        gripper_roll=angles_rad.gripper_roll,
+        joint4=angles_rad.joint4,
     )
 
 
@@ -879,7 +891,7 @@ def _inverse_kinematics_auto_joint3(
                 joint1=_to_deg(angles_rad.joint1),
                 joint2=_to_deg(angles_rad.joint2),
                 joint3=j3,
-                gripper_roll=angles_rad.gripper_roll,
+                joint4=angles_rad.joint4,
             )
             if check_joint_limits(
                 candidate.theta_base, candidate.joint1, candidate.joint2,
@@ -963,7 +975,8 @@ def requires_joint_limits(
         detail = {j: f"[{lo}, {hi}]" for j, (lo, hi) in config.joint_limits.items()}
         raise ValueError(
             f"Joint angles out of configured limits "
-            f"({theta_base},{joint1},{joint2},{joint3},{gripper_roll}) deg; limits = {detail}."
+            f"({theta_base},{joint1},{joint2},{joint3},{gripper_roll}) deg "
+            f"(joint4 = {gripper_roll}); limits = {detail}."
         )
     return JointAngles(theta_base, joint1, joint2, joint3, gripper_roll)
 
@@ -1075,6 +1088,11 @@ def verify_fk_ik(
 
 BASE_RADIUS_MM: float = 50.0
 
+# Wall-clock paced animation: extra samples make motion smoother without
+# making the move longer. A slow redraw skips frames instead of stretching it.
+VIZ_ANIM_FRAMES = 60
+VIZ_ANIM_FRAME_MS = 16
+
 
 def _set_equal_aspect(ax, points) -> None:
     """Force equal visual scale on all three axes, with symmetric limits."""
@@ -1167,20 +1185,227 @@ def animation_limits(
         ys.extend(p.y for p in points)
         zs.extend(p.z for p in points)
     if not xs:
-        return ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0))
-    span = max(
-        max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs), 1.0
+        return ((-1.0, 1.0), (-1.0, 1.0), (-1.0, 1.0))
+    # Include the base in the bounds, then use one padded span for all three
+    # axes. The view stays compact without hiding the grid origin at (0, 0, 0).
+    bounds = [
+        (min(0.0, min(values)), max(0.0, max(values)))
+        for values in (xs, ys, zs)
+    ]
+    span = max(max(hi - lo for lo, hi in bounds) * 1.08, 1.0)
+    return tuple(
+        ((lo + hi - span) / 2.0, (lo + hi + span) / 2.0)
+        for lo, hi in bounds
     )
-    mid_x, mid_y, mid_z = (
-        (max(xs) + min(xs)) / 2,
-        (max(ys) + min(ys)) / 2,
-        (max(zs) + min(zs)) / 2,
-    )
-    return (
-        (mid_x - span, mid_x + span),
-        (mid_y - span, mid_y + span),
-        (mid_z - span, mid_z + span),
-    )
+
+
+class RobotView:
+    """Persistent artists for one Matplotlib 3D axes.
+
+    Rebuilding a 3D axes every frame costs hundreds of
+    milliseconds on TkAgg. Building the static geometry once and only replacing
+    changing line data keeps each frame cheap. The grid is a single reusable
+    artist drawn on the X=0, Y=0 and Z=0 planes, so it meets at the robot base
+    without paying for Matplotlib's expensive default 3D panes.
+    """
+
+    _GRID_LINES = 5
+
+    def __init__(self, ax, config: RobotConfig = DEFAULT_CONFIG) -> None:
+        self.ax = ax
+        self.cfg = config
+        self._limits = None
+        self._build()
+
+    def _build(self) -> None:
+        ax = self.ax
+        ax.clear()
+
+        m, _ = _grip_parameters(self.cfg, self.cfg.gripper_opening)
+        axis_len = (self.cfg.l1 + m) * 0.5
+        for endpoint, colour, label in (
+            (CartesianPoint(axis_len, 0.0, 0.0), "r", "X"),
+            (CartesianPoint(0.0, axis_len, 0.0), "g", "Y"),
+            (CartesianPoint(0.0, 0.0, axis_len), "b", "Z"),
+        ):
+            ax.plot([0, endpoint.x], [0, endpoint.y], [0, endpoint.z],
+                    color=colour, linewidth=1.2)
+            ax.text(endpoint.x * 1.08, endpoint.y * 1.08, endpoint.z * 1.08,
+                    label, color=colour, fontsize=10)
+
+        # Origin marker, the fixed L0 column and the visual-only post below it.
+        ax.plot([0], [0], [0], linestyle="None", marker="o",
+                color="k", markersize=8)
+        ax.text(0, 0, 0, "O", color="k", fontsize=8)
+        ax.plot([0, 0], [0, 0], [0, self.cfg.l0], color="k", linewidth=5)
+        ax.plot([0, 0], [0, 0], [0, -axis_len * 0.2], color="k", linewidth=3)
+
+        radius, theta = np.meshgrid(
+            np.linspace(0.0, BASE_RADIUS_MM, 12),
+            np.linspace(0.0, 2.0 * math.pi, 64),
+        )
+        ax.plot_surface(
+            radius * np.cos(theta),
+            radius * np.sin(theta),
+            np.zeros_like(radius),
+            color="dimgray",
+            alpha=0.45,
+            linewidth=0,
+            shade=False,
+            label=f"base platform (R={BASE_RADIUS_MM:g} mm)",
+        )
+
+        def line(**kwargs):
+            artists = ax.plot([], [], [], **kwargs)
+            try:
+                return artists[0]
+            except (TypeError, IndexError, KeyError):
+                # unittest.Mock (and other stand-ins) is not subscriptable.
+                return artists
+
+        self._grid = line(color="gray", linewidth=0.6, alpha=0.35)
+        self._chain = line(color="k", linewidth=4)
+        self._joints = line(linestyle="None", marker="o", markersize=7,
+                            color="tab:orange")
+        self._finger_paths = line(color="tab:cyan", linewidth=1.6)
+        self._finger_tips = line(linestyle="None", marker="o", markersize=4,
+                                 color="tab:cyan")
+        self._palm = line(color="dimgray", linewidth=2)
+        self._grip = line(linestyle="None", marker="o", markersize=5,
+                          color="tab:red")
+        self._target = line(color="tab:red", linestyle=":", linewidth=1)
+        self._target.set_visible(False)
+        # Keep the joint readout just INSIDE the axes: ax.set_title() draws
+        # above the axes and gets clipped by the tight figure margin.
+        self._title = ax.text2D(
+            0.5, 0.98, "", transform=ax.transAxes,
+            ha="center", va="top", fontsize=8,
+        )
+
+        ax.set_box_aspect((1.0, 1.0, 1.0))
+        ax.set_axis_off()
+
+    def clear(self) -> None:
+        """Blank the canvas and rebuild the reusable artists."""
+        self._limits = None
+        self._build()
+
+    @staticmethod
+    def _arrays(points: Sequence[CartesianPoint]) -> Tuple[np.ndarray, ...]:
+        points = tuple(points)
+        return (
+            np.asarray([p.x for p in points], dtype=float),
+            np.asarray([p.y for p in points], dtype=float),
+            np.asarray([p.z for p in points], dtype=float),
+        )
+
+    @classmethod
+    def _joined_arrays(cls, groups) -> Tuple[np.ndarray, ...]:
+        """Several polylines in one artist, separated by NaNs."""
+        xs: list[float] = []
+        ys: list[float] = []
+        zs: list[float] = []
+        for group in groups:
+            points = tuple(group)
+            if not points:
+                continue
+            x, y, z = cls._arrays(points)
+            xs.extend(x.tolist())
+            ys.extend(y.tolist())
+            zs.extend(z.tolist())
+            xs.append(np.nan)
+            ys.append(np.nan)
+            zs.append(np.nan)
+        return (
+            np.asarray(xs, dtype=float),
+            np.asarray(ys, dtype=float),
+            np.asarray(zs, dtype=float),
+        )
+
+    @staticmethod
+    def _grid_ticks(lo: float, hi: float, count: int) -> Tuple[float, ...]:
+        """Evenly spaced ticks with zero added, so the grid crosses the base."""
+        ticks = {float(value) for value in np.linspace(lo, hi, count)}
+        if lo <= 0.0 <= hi:
+            ticks.add(0.0)
+        return tuple(sorted(ticks))
+
+    def _draw_grid(self, limits) -> None:
+        """Grid on the X=0, Y=0 and Z=0 planes, meeting at the robot base."""
+        (xlo, xhi), (ylo, yhi), (zlo, zhi) = limits
+        xs = self._grid_ticks(xlo, xhi, self._GRID_LINES)
+        ys = self._grid_ticks(ylo, yhi, self._GRID_LINES)
+        zs = self._grid_ticks(zlo, zhi, self._GRID_LINES)
+        x0 = 0.0 if xlo <= 0.0 <= xhi else xlo
+        y0 = 0.0 if ylo <= 0.0 <= yhi else ylo
+        z0 = 0.0 if zlo <= 0.0 <= zhi else zlo
+        segments: list[Tuple[CartesianPoint, CartesianPoint]] = []
+        for x in xs:
+            segments.append((CartesianPoint(x, ylo, z0), CartesianPoint(x, yhi, z0)))
+            segments.append((CartesianPoint(x, y0, zlo), CartesianPoint(x, y0, zhi)))
+        for y in ys:
+            segments.append((CartesianPoint(xlo, y, z0), CartesianPoint(xhi, y, z0)))
+            segments.append((CartesianPoint(x0, y, zlo), CartesianPoint(x0, y, zhi)))
+        for z in zs:
+            segments.append((CartesianPoint(xlo, y0, z), CartesianPoint(xhi, y0, z)))
+            segments.append((CartesianPoint(x0, ylo, z), CartesianPoint(x0, yhi, z)))
+        self._grid.set_data_3d(*self._joined_arrays(segments))
+
+    def draw(self, angles: JointAngles, target: CartesianPoint | None = None,
+             opening: float | None = None, fixed_limits=None) -> list:
+        """Repaint the arm without recreating artists; return the plot points."""
+        plot_points = _plot_points_for_pose(angles, self.cfg, opening, target)
+        limits = fixed_limits
+        if limits is None:
+            limits = animation_limits((angles,), self.cfg, opening, target)
+        if limits != self._limits:
+            _apply_limits(self.ax, limits)
+            self._limits = limits
+            self._draw_grid(limits)
+
+        a_rad = JointAngles(
+            _to_rad(angles.theta_base), _to_rad(angles.joint1),
+            _to_rad(angles.joint2), _to_rad(angles.joint3), angles.gripper_roll,
+        )
+        base, joint1_pos, joint2_pos, joint3, gripper_mount = _fk_parts(
+            a_rad.theta_base, a_rad.joint1, a_rad.joint2, a_rad.joint3, self.cfg
+        )
+        gripper = _gripper_pose(
+            a_rad.theta_base, a_rad.joint1, a_rad.joint2, a_rad.joint3,
+            self.cfg, opening, angles.gripper_roll,
+        )
+        chain = [joint1_pos, joint2_pos, joint3, gripper_mount]
+        self._chain.set_data_3d(*self._arrays(chain))
+        self._joints.set_data_3d(*self._arrays([joint1_pos, joint2_pos, joint3]))
+        paths = gripper.finger_paths or tuple(
+            (gripper_mount, tip) for tip in gripper.fingertips
+        )
+        self._finger_paths.set_data_3d(*self._joined_arrays(paths))
+        self._finger_tips.set_data_3d(*self._arrays(gripper.fingertips))
+
+        bases = [path[0] for path in paths]
+        palm_groups: list[list[CartesianPoint]] = [
+            [gripper_mount, b] for b in bases
+        ]
+        if len(bases) >= 2:
+            palm_groups.append(bases + [bases[0]])
+        self._palm.set_data_3d(*self._joined_arrays(palm_groups))
+        self._grip.set_data_3d(*self._arrays([gripper.grip_point]))
+        if target is not None:
+            self._target.set_data_3d(*self._arrays([gripper_mount, target]))
+            self._target.set_visible(True)
+        else:
+            self._target.set_visible(False)
+
+        self._title.set_text(
+            f"L0={self.cfg.l0:g}  L1={self.cfg.l1:g}  "
+            f"L2={self.cfg.l2:g}  L3={self.cfg.l3:g}  "
+            f"Lf={self.cfg.finger_length:g} mm\n"
+            f"base yaw {angles.theta_base:6.2f}  joint1 {angles.joint1:6.2f}  "
+            f"joint2 {angles.joint2:6.2f}  joint3 {angles.joint3:6.2f}  "
+            f"gripper_roll {angles.joint4:6.2f} (deg)  opening={gripper.opening:.2f}"
+        )
+        return plot_points
 
 
 def draw_robot(
@@ -1190,126 +1415,12 @@ def draw_robot(
     target: CartesianPoint | None = None,
     opening: float | None = None,
     fixed_limits=None,
-) -> None:
+) -> list:
     """Draw the arm, fingers, palm and optional target onto an existing
     3D ``Axes`` (degrees in).  Shared by the CLI and the tkinter GUI so both
-    render identically; the axes are cleared first, the canvas is re-used
-    for consecutive poses.  By default the view centres on both the pose and
-    ``target``; pass ``fixed_limits`` (from :func:`animation_limits`) to
-    keep the axes identical across a whole animation.  Returns
-    ``plot_points``.
+    render identically. Returns the key ``plot_points`` used for auto limits.
     """
-    ax.clear()
-    a_rad = JointAngles(
-        _to_rad(angles.theta_base), _to_rad(angles.joint1), _to_rad(angles.joint2),
-        _to_rad(angles.joint3), angles.gripper_roll,
-    )
-    base, joint1_pos, joint2_pos, joint3, gripper_mount = _fk_parts(
-        a_rad.theta_base, a_rad.joint1, a_rad.joint2, a_rad.joint3, config
-    )
-    gripper = _gripper_pose(
-        a_rad.theta_base, a_rad.joint1, a_rad.joint2, a_rad.joint3,
-        config, opening, angles.gripper_roll,
-    )
-
-    # World axes from the base origin (RGB = X, Y, Z).
-    m, _ = _grip_parameters(config, opening)
-    axis_len = (config.l1 + m) * 0.5
-    for origin, heading, colour, label in (
-        ((0, 0, 0), (axis_len, 0, 0), "r", "X"),
-        ((0, 0, 0), (0, axis_len, 0), "g", "Y"),
-        ((0, 0, 0), (0, 0, axis_len), "b", "Z"),
-    ):
-        ax.quiver(*origin, *heading, length=axis_len, normalize=True, color=colour)
-        ax.text(*tuple(h + axis_len * 0.55 for h in heading), label, color=colour, fontsize=10)
-
-    # Base post (visual only, not part of the FK model).
-    ax.plot([0, 0], [0, 0], [0, -axis_len * 0.2], color="k", linewidth=3)
-    import numpy as np
-
-    radius, theta = np.meshgrid(
-        np.linspace(0.0, BASE_RADIUS_MM, 12),
-        np.linspace(0.0, 2.0 * math.pi, 64),
-    )
-    ax.plot_surface(
-        radius * np.cos(theta),
-        radius * np.sin(theta),
-        np.zeros_like(radius),
-        color="dimgray",
-        alpha=0.45,
-        linewidth=0,
-        shade=False,
-        label=f"base platform (R={BASE_RADIUS_MM:g} mm)",
-    )
-
-    xs = [base.x, joint1_pos.x, joint2_pos.x, joint3.x, gripper_mount.x]
-    ys = [base.y, joint1_pos.y, joint2_pos.y, joint3.y, gripper_mount.y]
-    zs = [base.z, joint1_pos.z, joint2_pos.z, joint3.z, gripper_mount.z]
-    ax.plot(xs[:2], ys[:2], zs[:2], color="k", linewidth=5, label="fixed L0")
-    ax.plot(xs[1:], ys[1:], zs[1:], color="k", linewidth=4, label="tilt links")
-    ax.scatter(*base.coords(), color="k", s=90, marker="o", label="base")
-    ax.scatter(joint1_pos.x, joint1_pos.y, joint1_pos.z, color="tab:purple", s=90, marker="s", label="joint 1")
-    ax.scatter(joint2_pos.x, joint2_pos.y, joint2_pos.z, color="tab:orange", s=90, marker="o", label="joint 2")
-    ax.scatter(joint3.x, joint3.y, joint3.z, color="tab:blue", s=130, marker="*", label="joint 3")
-
-    for k, tip in enumerate(gripper.fingertips):
-        # The finger is a rigid curved bar, so plot its sampled centreline as a
-        # polyline.  Fall back to a straight segment if a caller built a
-        # FingerGripper without paths.
-        path = gripper.finger_paths[k] if k < len(gripper.finger_paths) else (gripper_mount, tip)
-        ax.plot(
-            [p.x for p in path], [p.y for p in path], [p.z for p in path],
-            color="tab:cyan", linewidth=1.6,
-        )
-        ax.scatter(tip.x, tip.y, tip.z, color="tab:cyan", s=15, marker="o", label="fingertip" if k == 0 else None)
-
-    # Palm: the finger bases sit on a ring around the tool axis, so spokes and
-    # a base-ring outline tie them back to the wrist tip -- otherwise the claw
-    # looks detached from the arm.  Purely visual, no kinematics involved.
-    bases = [path[0] for path in gripper.finger_paths]
-    for index, base_pt in enumerate(bases):
-        if math.dist(gripper_mount.coords(), base_pt.coords()) > 1e-9:
-            ax.plot(
-                [gripper_mount.x, base_pt.x], [gripper_mount.y, base_pt.y],
-                [gripper_mount.z, base_pt.z],
-                color="dimgray", linewidth=2, label="palm" if index == 0 else None,
-            )
-    if len(bases) >= 2:
-        ring = bases + [bases[0]]
-        ax.plot(
-            [p.x for p in ring], [p.y for p in ring], [p.z for p in ring],
-            color="dimgray", linewidth=2,
-        )
-
-    # Optional IK target: a thin dotted connector to the wrist, no bulky marker.
-    if target is not None:
-        ax.plot(
-            [gripper_mount.x, target.x], [gripper_mount.y, target.y], [gripper_mount.z, target.z],
-            color="tab:red", linestyle=":", linewidth=1, label="target",
-        )
-
-    ax.set_xlabel("X [mm]")
-    ax.set_ylabel("Y [mm]")
-    ax.set_zlabel("Z [mm]")
-    ax.set_title(
-        f"L0={config.l0:g}  L1={config.l1:g}  L2={config.l2:g}  L3={config.l3:g} mm\n"
-        f"base yaw={angles.theta_base:7.2f}  joint1={angles.joint1:7.2f}  "
-        f"joint2={angles.joint2:7.2f}  (deg)   opening={gripper.opening:.2f}"
-    )
-    ax.legend(loc="upper left", fontsize=8)
-    plot_points = [base, joint1_pos, joint2_pos, joint3, gripper.grip_point]
-    plot_points += list(gripper.fingertips)
-    plot_points.extend(
-        CartesianPoint(BASE_RADIUS_MM * math.cos(angle), BASE_RADIUS_MM * math.sin(angle), 0.0)
-        for angle in (0.0, math.pi / 2, math.pi, 3 * math.pi / 2)
-    )
-    if target is not None:
-        plot_points.append(target)
-    if fixed_limits is not None:
-        _apply_limits(ax, fixed_limits)
-    else:
-        _set_equal_aspect(ax, plot_points)
-    return plot_points
+    return RobotView(ax, config).draw(angles, target, opening, fixed_limits)
 
 
 def _new_3d_axes(figsize=(8, 7)):
@@ -1351,7 +1462,7 @@ def interpolate_joints(
     if frames < 2:
         raise ValueError(f"frames must be >= 2, got {frames}.")
     base_delta = math.degrees(_wrap_angle(math.radians(to_angles.theta_base - from_angles.theta_base)))
-    roll_delta = math.degrees(_wrap_angle(math.radians(to_angles.gripper_roll - from_angles.gripper_roll)))
+    roll_delta = math.degrees(_wrap_angle(math.radians(to_angles.joint4 - from_angles.joint4)))
     j1_delta = to_angles.joint1 - from_angles.joint1
     j2_delta = to_angles.joint2 - from_angles.joint2
     j3_delta = to_angles.joint3 - from_angles.joint3
@@ -1361,7 +1472,7 @@ def interpolate_joints(
         t = k / (frames - 1)
         ease = t * t * (3.0 - 2.0 * t)  # smoothstep ease-in-out
         base = from_angles.theta_base + base_delta * ease
-        roll = from_angles.gripper_roll + roll_delta * ease
+        roll = from_angles.joint4 + roll_delta * ease
         if 0 < k < frames - 1:
             # Keep intermediate poses in (-180, 180] so the label/limits stay
             # canonical; the ±180 seam is visually continuous (arm is periodic).
@@ -1369,7 +1480,7 @@ def interpolate_joints(
             roll = math.degrees(_wrap_angle(math.radians(roll)))
         elif k == frames - 1:
             base = to_angles.theta_base  # exact endpoint (unwrapped equals it mod 360)
-            roll = to_angles.gripper_roll
+            roll = to_angles.joint4
         poses.append(
             JointAngles(
                 base,
@@ -1413,18 +1524,18 @@ def plot_animation(
     config: RobotConfig = DEFAULT_CONFIG,
     opening: float | None = None,
     target: CartesianPoint | None = None,
-    frames: int = 60,
-    interval: int = 30,
+    frames: int = VIZ_ANIM_FRAMES,
+    interval: int = VIZ_ANIM_FRAME_MS,
     from_opening: float | None = None,
 ) -> None:
     """Animate a smooth joint-space transition in its OWN window (blocks).
 
-    Steps ``interpolate_joints(...)`` through the shared ``draw_robot()``
-    primitive, keeping the optional dotted red line to the target visible.  ``opening`` is
-    the target grip opening; pass ``from_opening`` to ramp the fingers from
-    their current opening to it (otherwise the opening is held constant).
-    The 3D axes are pinned to ``animation_limits(...)`` so the view never
-    re-scales while the arm moves.
+    One persistent :class:`RobotView` is reused for every frame; rebuilding the
+    3D axes per frame was the cause of the old stutter.
+
+    ``opening`` is the target grip opening; pass ``from_opening`` to ramp the
+    fingers from their current opening to it. The 3D axes are pinned to
+    ``animation_limits(...)`` so the view never re-scales while the arm moves.
     """
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation
@@ -1435,18 +1546,21 @@ def plot_animation(
     openings = interpolate_opening(start_opening, target_opening, frames)
 
     fig, ax = _new_3d_axes()
+    view = RobotView(ax, config)
     # Whole-trajectory limits so the axes never re-scale while the arm moves.
     limits = animation_limits(poses, config, openings, target)
 
     def draw_frame(k: int) -> Tuple[list, ...]:
-        draw_robot(ax, poses[k], config, target, openings[k], fixed_limits=limits)
-        return ax.collections + ax.lines
+        view.draw(poses[k], target, openings[k], limits)
+        return list(ax.collections) + list(ax.lines)
 
     anim = FuncAnimation(fig, draw_frame, frames=frames, interval=interval,
                          blit=False, cache_frame_data=False, repeat=False)
-    plt.show()
-    # Keep a reference so the animation is not garbage-collected mid-play.
+    # Keep references so neither the animation nor its artists are collected
+    # mid-play. ``plt.show()`` blocks until the window is closed.
     fig._dume_anim = anim
+    fig._dume_view = view
+    plt.show()
 
 
 # =====================================================================
@@ -1536,7 +1650,7 @@ def _prompt_angles() -> JointAngles:
     ts = _prompt_float("  joint1         (deg): ")
     te = _prompt_float("  joint2         (deg): ")
     tj = _prompt_float("  joint3         (deg): ")
-    roll = _prompt_float("  gripper_roll   (deg): ")
+    roll = _prompt_float("  joint4 / wrist roll (deg): ")
     return JointAngles(tb, ts, te, tj, roll)
 
 
@@ -1557,7 +1671,7 @@ def _prompt_opening(config: RobotConfig) -> float | None:
     return float(raw)
 
 
-def _prompt_frames(default: int = 30) -> int:
+def _prompt_frames(default: int = VIZ_ANIM_FRAMES) -> int:
     """Ask for the animation frame count; blank/enter keeps the default."""
     raw = input(f"  animation frames (default {default}, Enter = default): ").strip()
     if raw == "":
@@ -1606,12 +1720,12 @@ def _prompt_ik_target(config: RobotConfig, current_roll: float = 0.0):
         print(f"\n  ERROR: {exc}")
         return None
     roll_raw = input(
-        f"  gripper_roll (deg, default {current_roll:g}, Enter = current): "
+        f"  joint4 / wrist roll (deg, default {current_roll:g}, Enter = current): "
     ).strip()
     try:
         gripper_roll = current_roll if roll_raw == "" else float(roll_raw)
     except ValueError:
-        print(f"\n  ERROR: invalid gripper_roll {roll_raw!r}; enter degrees.")
+        print(f"\n  ERROR: invalid joint4 {roll_raw!r}; enter degrees.")
         return None
     opening = _prompt_opening(config)
 
@@ -1693,7 +1807,7 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
                 f"  joint1={a.joint1:8.3f} deg\n"
                 f"  joint2={a.joint2:8.3f} deg\n"
                 f"  joint3={a.joint3:8.3f} deg\n"
-                f"  gripper_roll={a.gripper_roll:8.3f} deg"
+                f"  joint4={a.joint4:8.3f} deg"
             )
             print(f"  within joint limits: {'yes' if hits else 'NO — out of range'}")
 
@@ -1727,7 +1841,7 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
             print(
                 f"\n  IK result: base={a.theta_base:.3f}, joint1={a.joint1:.3f}, "
                 f"joint2={a.joint2:.3f}, joint3={a.joint3:.3f}, "
-                f"gripper_roll={a.gripper_roll:.3f} (deg)"
+                f"joint4={a.joint4:.3f} (deg)"
             )
             rebuilt = forward_kinematics(
                 a.theta_base, a.joint1, a.joint2, a.joint3, config, opening
@@ -1765,11 +1879,11 @@ def cli(config: RobotConfig = DEFAULT_CONFIG) -> None:
                 f"\n  Animating transition:"
                 f"\n    start  base={last_angles.theta_base:8.3f}  "
                 f"joint1={last_angles.joint1:8.3f}  joint2={last_angles.joint2:8.3f}  "
-                f"joint3={last_angles.joint3:8.3f}  roll={last_angles.gripper_roll:8.3f} deg"
+                f"joint3={last_angles.joint3:8.3f}  joint4={last_angles.joint4:8.3f} deg"
                 f"  opening={last_opening:.3f}"
                 f"\n    target base={a.theta_base:8.3f}  "
                 f"joint1={a.joint1:8.3f}  joint2={a.joint2:8.3f}  "
-                f"joint3={a.joint3:8.3f}  roll={a.gripper_roll:8.3f} deg"
+                f"joint3={a.joint3:8.3f}  joint4={a.joint4:8.3f} deg"
                 f"  opening={target_opening:.3f}"
             )
             if not check_joint_limits(

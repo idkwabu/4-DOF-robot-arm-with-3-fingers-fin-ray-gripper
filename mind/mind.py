@@ -118,8 +118,8 @@ DIRECTION_BARE_FILLER = (
 RAISE_VERB = re.compile(r"\b(?:raise|lift|elevate|ascend)\b", re.IGNORECASE)
 LOWER_VERB = re.compile(r"\b(?:lower|drop|descend|sink)\b", re.IGNORECASE)
 EXPLICIT_TARGET = re.compile(
-    r"\b(gripper\s+roll|tool\s+roll|roll|joint\s*[123]|j1|j2|j3|base|"
-    r"gripper|fingers?|hand|first|second|third|1st|2nd|3rd)\b"
+    r"\b(gripper\s+roll|tool\s+roll|wrist\s+roll|roll|joint\s*[1234]|j[1-4]|base|"
+    r"gripper|fingers?|hand|first|second|third|fourth|1st|2nd|3rd|4th)\b"
     r"[^.\n\d-]{0,20}(-?\d+)\b",
     re.IGNORECASE,
 )
@@ -164,6 +164,12 @@ CONTROL_NEGATED = re.compile(
 JOINT_ALIASES = {
     "gripper roll": "gripper_roll",
     "tool roll": "gripper_roll",
+    "wrist roll": "gripper_roll",
+    "joint4": "gripper_roll",
+    "joint 4": "gripper_roll",
+    "j4": "gripper_roll",
+    "fourth": "gripper_roll",
+    "4th": "gripper_roll",
     "roll": "gripper_roll",
     "fingers": "gripper",
     "finger": "gripper",
@@ -179,7 +185,7 @@ JOINT_ALIASES = {
 HELP_TEXT = (
     "I understand: turn left/right, tilt up/down, move up-left/up-right/"
     "down-left/down-right/up-middle/down-middle, open or close the gripper, "
-    "set a joint to a number, go home, stop, status.\n\n"
+    "set a joint to a number (joint4 / wrist roll is the tool roll), go home, stop, status.\n\n"
     "A plain turn swings 45 degrees off the middle. Add 'all the way', "
     "'as far as you can', 'fully', 'completely', 'hard' or 'max' for the full "
     "90: 'turn all the way left' swings to the stop, 'turn left' does not.\n\n"
@@ -406,8 +412,9 @@ def is_valid_command(command: object) -> bool:
     direction = command["direction"]
     if action not in ALL_ACTIONS or direction not in ALL_DIRECTION_VALUES:
         return False
-    for joint, limits in JOINT_RANGES.items():
+    for joint in ALL_JOINTS:
         value = command[joint]
+        limits = JOINT_RANGES[joint]
         if value is not None and not _in_range(value, *limits):
             return False
     if action in CONTROL_ACTIONS and direction != "default":

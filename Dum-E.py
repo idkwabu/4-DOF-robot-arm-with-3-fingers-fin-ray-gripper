@@ -14,6 +14,7 @@ against and that ``robot_state.json`` already stores:
     joint1 -90 .. 90    shoulder angle from horizontal outward (positive rises)
     joint2 -150 .. 150   link L2 RELATIVE to L1
     joint3 -120 .. 120   link L3 RELATIVE to L2
+    joint4 -180 .. 180   wrist/tool roll about the tool axis (legacy gripper_roll)
     gripper   0 .. 100   0 = closed, 100 = open
 
 The link chain is base -> fixed vertical L0 -> joint1 -> L1 -> joint2 -> L2
@@ -53,6 +54,8 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any, Iterable, Optional
 
+import numpy as np
+
 from robot_contract import JOINT_LIMITS
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -90,7 +93,25 @@ PROMPT_FILE = MIND_DIR / "system_prompt.txt"
 # is spelled differently, because the dataclass inherited the old name.
 ANGLE_JOINTS = (("theta_base", "base"), ("joint1", "joint1"),
                 ("joint2", "joint2"), ("joint3", "joint3"),
-                ("gripper_roll", "gripper_roll"))
+                ("joint4", "joint4"))
+
+# The side panel shows each physical control once: joint4 replaces the legacy
+# gripper_roll row, and gripper is the opening percentage.
+POSE_KEYS = ("base", "joint1", "joint2", "joint3", "joint4", "gripper")
+POSE_LABELS = {
+    "base": "Base", "joint1": "J1", "joint2": "J2", "joint3": "J3",
+    "joint4": "J4", "gripper": "Grip",
+}
+
+# Compact, consistent widget metrics shared by the editable joint panels.
+UI_FONT = ("Segoe UI", 9)
+VALUE_FONT = ("Consolas", 9)
+JOINT_LABEL_WIDTH = 10
+JOINT_ENTRY_WIDTH = 8
+UI_PAD_X = 8
+UI_PAD_Y = 4
+PANEL_TOP_PAD = 12
+JOINT_TOP_PAD = 8
 
 # Link lengths in millimetres and the 3-finger end effector.
 L0 = 100.0
@@ -128,8 +149,11 @@ WRIST_HOME = -60.0
 # Distinct from WRIST_HOME, which is a wrist angle RELATIVE to L2.
 STEM_DOWN_ANGLE_DEG = -90.0
 
-VIZ_ANIM_FRAMES = 30
-VIZ_ANIM_INTERVAL_MS = 30
+# Animation runs at a fixed wall-clock pace. More samples make the motion
+# smoother without making it slower: a slow redraw simply skips intermediate
+# frames instead of stretching the whole move.
+VIZ_ANIM_FRAMES = 60
+VIZ_ANIM_FRAME_MS = 16
 # How often the Command tab drains finished model requests off the worker thread.
 POLL_INTERVAL_MS = 60
 MODEL_REQUEST_QUEUE_SIZE = 1
@@ -342,13 +366,18 @@ class RobotConfig:
 @dataclass(frozen=True)
 class JointAngles:
     """Relative joint angles in degrees; joint1 + joint2 + joint3 is the tool
-    elevation down the arm."""
+    elevation down the arm. ``gripper_roll`` is the legacy name for joint4."""
 
     theta_base: float
     joint1: float
     joint2: float
     joint3: float
-    gripper_roll: float = 0.0
+    joint4: float = 0.0
+
+    @property
+    def gripper_roll(self) -> float:
+        """Backward-compatible alias for the wrist/tool roll joint."""
+        return self.joint4
 
 
 @dataclass(frozen=True)
@@ -370,6 +399,11 @@ class GripperPose:
     # as a curve; `fingertips` is the last point of each path.
     finger_paths: tuple[tuple[CartesianPoint, ...], ...] = ()
     gripper_roll: float = 0.0
+
+    @property
+    def joint4(self) -> float:
+        """The wrist/tool roll angle, named as a joint."""
+        return self.gripper_roll
 
 
 CONFIG = RobotConfig()
@@ -417,7 +451,7 @@ def _require_limits(angles: JointAngles, config: RobotConfig = CONFIG) -> None:
             "The solution leaves a joint outside its range: "
             f"base {angles.theta_base:.2f}, joint1 {angles.joint1:.2f}, "
             f"joint2 {angles.joint2:.2f}, joint3 {angles.joint3:.2f}, "
-            f"gripper_roll {angles.gripper_roll:.2f}."
+            f"joint4 {angles.joint4:.2f}."
         )
 
 
@@ -551,7 +585,7 @@ def gripper_pose(
     helper = CartesianPoint(0.0, 0.0, 1.0) if abs(axis.z) < 0.999 else CartesianPoint(1.0, 0.0, 0.0)
     first = _unit(_cross(axis, helper))
     second = _cross(axis, first)
-    roll = math.radians(angles.gripper_roll)
+    roll = math.radians(angles.joint4)
     first, second = (
         _add(_scale(first, math.cos(roll)), _scale(second, math.sin(roll))),
         _add(_scale(second, math.cos(roll)), _scale(first, -math.sin(roll))),
@@ -575,7 +609,7 @@ def gripper_pose(
         spread=spread,
         fingertips=tuple(tips),
         finger_paths=tuple(paths),
-        gripper_roll=angles.gripper_roll,
+        gripper_roll=angles.joint4,
     )
 
 
@@ -871,18 +905,19 @@ def interpolate_joints(
 ) -> tuple[JointAngles, ...]:
     if frames < 2:
         raise ValueError("Animation must contain at least two frames.")
-    roll_delta = _wrap_deg(end.gripper_roll - start.gripper_roll)
+    base_delta = _wrap_deg(end.theta_base - start.theta_base)
+    roll_delta = _wrap_deg(end.joint4 - start.joint4)
     out: list[JointAngles] = []
     for index in range(frames):
         t = index / (frames - 1)
         eased = t * t * (3.0 - 2.0 * t)  # smoothstep
         out.append(
             JointAngles(
-                start.theta_base + (end.theta_base - start.theta_base) * eased,
+                _wrap_deg(start.theta_base + base_delta * eased),
                 start.joint1 + (end.joint1 - start.joint1) * eased,
                 start.joint2 + (end.joint2 - start.joint2) * eased,
                 start.joint3 + (end.joint3 - start.joint3) * eased,
-                _wrap_deg(start.gripper_roll + roll_delta * eased),
+                _wrap_deg(start.joint4 + roll_delta * eased),
             )
         )
     out[0] = start
@@ -946,11 +981,14 @@ def animation_limits(
         CartesianPoint(0.0, 0.0, reach),
     ])
     axes = list(zip(*[(p.x, p.y, p.z) for p in points]))
-    span = max(max(axis) - min(axis) for axis in axes)
-    span = max(span * 0.58, 300.0)
+    # Frame the arm tightly but always keep the base inside the view. One
+    # shared span preserves equal aspect; centring each axis on its own bounds
+    # avoids the large empty box that symmetric +/-span limits created.
+    bounds = [(min(0.0, min(axis)), max(0.0, max(axis))) for axis in axes]
+    span = max(max(hi - lo for lo, hi in bounds) * 1.08, 300.0)
     return tuple(
-        ((max(axis) + min(axis)) / 2.0 - span, (max(axis) + min(axis)) / 2.0 + span)
-        for axis in axes
+        ((lo + hi - span) / 2.0, (lo + hi + span) / 2.0)
+        for lo, hi in bounds
     )
 
 
@@ -961,106 +999,222 @@ def animation_limits(
 BASE_RADIUS_MM = 50.0
 
 
+class RobotView:
+    """Persistent artists for one Matplotlib 3D axes.
+
+    Rebuilding a 3D axes every frame costs hundreds of
+    milliseconds on TkAgg, which makes the animation stutter. Drawing the static
+    geometry once and then only replacing the changing line data keeps each
+    frame cheap. The default axis panes are also off because projecting them is
+    expensive; the coloured X/Y/Z triad and a small reusable grid below give the
+    same sense of position without that cost.
+    """
+
+    _GRID_LINES = 5
+
+    def __init__(self, axis_view, config: RobotConfig = CONFIG) -> None:
+        self.ax = axis_view
+        self.cfg = config
+        self._limits: tuple[tuple[float, float], ...] | None = None
+        self._build()
+
+    def _build(self) -> None:
+        ax = self.ax
+        ax.clear()
+
+        reach = (self.cfg.l0 + self.cfg.l1 + self.cfg.l2 + self.cfg.l3) * 0.55
+        for endpoint, color, label in (
+            (CartesianPoint(reach, 0, 0), "tab:red", "X"),
+            (CartesianPoint(0, reach, 0), "tab:green", "Y"),
+            (CartesianPoint(0, 0, reach), "tab:blue", "Z"),
+        ):
+            ax.plot([0, endpoint.x], [0, endpoint.y], [0, endpoint.z],
+                    color=color, linewidth=1.2)
+            tip = _scale(endpoint, 1.08)
+            ax.text(tip.x, tip.y, tip.z, label, color=color, fontsize=9)
+
+        ax.plot([0], [0], [0], linestyle="None", marker="o",
+                color="black", markersize=6)
+        ax.text(0, 0, 0, "O", color="black", fontsize=8)
+
+        ax.plot([0, 0], [0, 0], [0, self.cfg.l0],
+                color="black", linewidth=5, label="fixed L0")
+        radius, theta = np.meshgrid(
+            np.linspace(0.0, BASE_RADIUS_MM, 12),
+            np.linspace(0.0, 2.0 * math.pi, 64),
+        )
+        ax.plot_surface(
+            radius * np.cos(theta),
+            radius * np.sin(theta),
+            np.zeros_like(radius),
+            color="dimgray",
+            alpha=0.45,
+            linewidth=0,
+            shade=False,
+            label=f"base platform (R={BASE_RADIUS_MM:g} mm)",
+        )
+
+        def line(**kwargs):
+            return ax.plot([], [], [], **kwargs)[0]
+
+        self._grid = line(color="gray", linewidth=0.6, alpha=0.35)
+        self._chain = line(color="black", linewidth=4)
+        self._joints = line(linestyle="None", marker="o", markersize=7,
+                            color="tab:orange")
+        self._finger_paths = line(color="tab:cyan", linewidth=1.6)
+        self._finger_tips = line(linestyle="None", marker="o", markersize=4,
+                                 color="tab:cyan")
+        self._palm = line(color="dimgray", linewidth=2)
+        self._goal = line(linestyle="None", marker="o", markersize=5,
+                          color="tab:red")
+        self._target = line(color="tab:green", linestyle=":", linewidth=1)
+        self._target.set_visible(False)
+        # Keep the joint readout just INSIDE the axes: ax.set_title() draws
+        # above the axes and gets clipped by the tight figure margin.
+        self._title = ax.text2D(
+            0.5, 0.98, "", transform=ax.transAxes,
+            ha="center", va="top", fontsize=8,
+        )
+
+        ax.set_box_aspect((1.0, 1.0, 1.0))
+        ax.set_axis_off()
+
+    def clear(self) -> None:
+        """Blank the canvas and rebuild the reusable artists."""
+        self._limits = None
+        self._build()
+
+    @staticmethod
+    def _arrays(points: Iterable[CartesianPoint]) -> tuple[np.ndarray, ...]:
+        points = tuple(points)
+        return (
+            np.asarray([p.x for p in points], dtype=float),
+            np.asarray([p.y for p in points], dtype=float),
+            np.asarray([p.z for p in points], dtype=float),
+        )
+
+    @classmethod
+    def _joined_arrays(cls, groups: Iterable[Iterable[CartesianPoint]]) -> tuple[np.ndarray, ...]:
+        """Several polylines in one artist, separated by NaNs."""
+        xs: list[float] = []
+        ys: list[float] = []
+        zs: list[float] = []
+        for group in groups:
+            points = tuple(group)
+            if not points:
+                continue
+            x, y, z = cls._arrays(points)
+            xs.extend(x.tolist())
+            ys.extend(y.tolist())
+            zs.extend(z.tolist())
+            xs.append(np.nan)
+            ys.append(np.nan)
+            zs.append(np.nan)
+        return (
+            np.asarray(xs, dtype=float),
+            np.asarray(ys, dtype=float),
+            np.asarray(zs, dtype=float),
+        )
+
+    @staticmethod
+    def _grid_ticks(lo: float, hi: float, count: int) -> tuple[float, ...]:
+        """Evenly spaced ticks with zero added, so the grid crosses the base."""
+        ticks = {float(value) for value in np.linspace(lo, hi, count)}
+        if lo <= 0.0 <= hi:
+            ticks.add(0.0)
+        return tuple(sorted(ticks))
+
+    def _draw_grid(self, limits: tuple[tuple[float, float], ...]) -> None:
+        """Grid on the X=0, Y=0 and Z=0 planes, meeting at the robot base.
+
+        Matplotlib's default 3D grid is drawn through the axis panes, which is
+        the single most expensive part of a TkAgg redraw. These lines are just
+        one reusable Line3D artist, rebuilt only when the view limits change.
+        """
+        (xlo, xhi), (ylo, yhi), (zlo, zhi) = limits
+        xs = self._grid_ticks(xlo, xhi, self._GRID_LINES)
+        ys = self._grid_ticks(ylo, yhi, self._GRID_LINES)
+        zs = self._grid_ticks(zlo, zhi, self._GRID_LINES)
+        # The coordinate planes themselves. Fall back to the near edge if a
+        # view ever excludes the origin entirely.
+        x0 = 0.0 if xlo <= 0.0 <= xhi else xlo
+        y0 = 0.0 if ylo <= 0.0 <= yhi else ylo
+        z0 = 0.0 if zlo <= 0.0 <= zhi else zlo
+        segments: list[tuple[CartesianPoint, CartesianPoint]] = []
+        for x in xs:
+            # XY plane: y runs across, at the base height.
+            segments.append((CartesianPoint(x, ylo, z0), CartesianPoint(x, yhi, z0)))
+            # XZ plane: z runs up, on the Y=0 wall.
+            segments.append((CartesianPoint(x, y0, zlo), CartesianPoint(x, y0, zhi)))
+        for y in ys:
+            segments.append((CartesianPoint(xlo, y, z0), CartesianPoint(xhi, y, z0)))
+            segments.append((CartesianPoint(x0, y, zlo), CartesianPoint(x0, y, zhi)))
+        for z in zs:
+            segments.append((CartesianPoint(xlo, y0, z), CartesianPoint(xhi, y0, z)))
+            segments.append((CartesianPoint(x0, ylo, z), CartesianPoint(x0, yhi, z)))
+        self._grid.set_data_3d(*self._joined_arrays(segments))
+
+    def draw(self, angles: JointAngles, opening: Optional[float] = None,
+             target: Any = None,
+             fixed_limits: tuple[tuple[float, float], ...] | None = None) -> None:
+        """Repaint the arm without recreating any artists."""
+        op = self.cfg.gripper_opening if opening is None else opening
+        limits = fixed_limits
+        if limits is None:
+            limits = animation_limits((angles,), op, target, self.cfg)
+        if limits != self._limits:
+            self.ax.set_xlim(*limits[0])
+            self.ax.set_ylim(*limits[1])
+            self.ax.set_zlim(*limits[2])
+            self._limits = limits
+            self._draw_grid(limits)
+
+        pose = gripper_pose(angles, op, self.cfg)
+        goal = forward_kinematics(angles, op, self.cfg)
+        self._chain.set_data_3d(*self._arrays(
+            (pose.joint1, pose.joint2, pose.joint3, pose.gripper_mount)
+        ))
+        self._joints.set_data_3d(*self._arrays(
+            (pose.joint1, pose.joint2, pose.joint3)
+        ))
+
+        paths = pose.finger_paths or tuple(
+            (pose.gripper_mount, tip) for tip in pose.fingertips
+        )
+        self._finger_paths.set_data_3d(*self._joined_arrays(paths))
+        self._finger_tips.set_data_3d(*self._arrays(pose.fingertips))
+
+        bases = [path[0] for path in paths]
+        palm_groups: list[list[CartesianPoint]] = [
+            [pose.gripper_mount, base] for base in bases
+        ]
+        if len(bases) >= 2:
+            palm_groups.append(bases + [bases[0]])
+        self._palm.set_data_3d(*self._joined_arrays(palm_groups))
+
+        self._goal.set_data_3d(*self._arrays((goal,)))
+        if isinstance(target, CartesianPoint):
+            self._target.set_data_3d(*self._arrays((pose.gripper_mount, target)))
+            self._target.set_visible(True)
+        else:
+            self._target.set_visible(False)
+
+        self._title.set_text(
+            f"L0={self.cfg.l0:g} L1={self.cfg.l1:g} L2={self.cfg.l2:g} "
+            f"L3={self.cfg.l3:g} Lf={self.cfg.finger_length:g} mm\n"
+            f"base yaw {angles.theta_base:6.2f}   joint1 {angles.joint1:6.2f}   "
+            f"joint2 {angles.joint2:6.2f}   joint3 {angles.joint3:6.2f}   "
+            f"gripper_roll {angles.joint4:6.2f}   gripper {op * 100:5.1f}%"
+        )
+
+
 def draw_robot(
     axis_view, angles: JointAngles, opening: float = 1.0,
     config: RobotConfig = CONFIG, target: Any = None,
     fixed_limits: tuple[tuple[float, float], ...] | None = None,
 ) -> None:
     """Render the arm, the fixed L0 column and the coordinate triad."""
-    pose = gripper_pose(angles, opening, config)
-    goal = forward_kinematics(angles, opening, config)
-    base = CartesianPoint(0.0, 0.0, 0.0)
-    axis_view.clear()
-
-    reach = (config.l0 + config.l1 + config.l2 + config.l3) * 0.55
-    for endpoint, color, label in (
-        (CartesianPoint(reach, 0, 0), "tab:red", "X"),
-        (CartesianPoint(0, reach, 0), "tab:green", "Y"),
-        (CartesianPoint(0, 0, reach), "tab:blue", "Z"),
-    ):
-        axis_view.plot([0, endpoint.x], [0, endpoint.y], [0, endpoint.z],
-                       color=color, linewidth=1.2)
-        tip = _scale(endpoint, 1.08)
-        axis_view.text(tip.x, tip.y, tip.z, label, color=color, fontsize=9)
-
-    axis_view.plot([base.x, pose.joint1.x], [base.y, pose.joint1.y], [base.z, pose.joint1.z],
-                   color="black", linewidth=5, label="fixed L0")
-    import numpy as np
-
-    radius, theta = np.meshgrid(
-        np.linspace(0.0, BASE_RADIUS_MM, 12),
-        np.linspace(0.0, 2.0 * math.pi, 64),
-    )
-    axis_view.plot_surface(
-        radius * np.cos(theta),
-        radius * np.sin(theta),
-        np.zeros_like(radius),
-        color="dimgray",
-        alpha=0.45,
-        linewidth=0,
-        shade=False,
-        label=f"base platform (R={BASE_RADIUS_MM:g} mm)",
-    )
-    chain = (pose.joint1, pose.joint2, pose.joint3, pose.gripper_mount)
-    axis_view.plot([p.x for p in chain], [p.y for p in chain], [p.z for p in chain],
-                   color="black", linewidth=4, label="tilt links")
-    axis_view.scatter(base.x, base.y, base.z, color="black", s=70, marker="o", label="base")
-    axis_view.scatter(pose.joint1.x, pose.joint1.y, pose.joint1.z,
-                      color="tab:purple", s=70, marker="s", label="joint 1")
-    axis_view.scatter(pose.joint2.x, pose.joint2.y, pose.joint2.z,
-                      color="tab:orange", s=70, marker="o", label="joint 2")
-    axis_view.scatter(pose.joint3.x, pose.joint3.y, pose.joint3.z,
-                      color="tab:blue", s=100, marker="*", label="joint 3")
-    for k, tip in enumerate(pose.fingertips):
-        # The finger is a rigid curved bar, so plot its sampled centreline as a
-        # polyline.  Fall back to a straight segment for a pose built without paths.
-        path = pose.finger_paths[k] if k < len(pose.finger_paths) else (pose.gripper_mount, tip)
-        axis_view.plot([p.x for p in path], [p.y for p in path], [p.z for p in path],
-                       color="tab:cyan", linewidth=1.6)
-        axis_view.scatter(tip.x, tip.y, tip.z, color="tab:cyan", s=15)
-    # Palm: spokes + a base-ring outline tie the finger bases (a ring around
-    # the tool axis) back to the wrist tip so the claw looks attached to the arm.
-    bases = [path[0] for path in pose.finger_paths]
-    for index, base_pt in enumerate(bases):
-        if math.dist(
-            (pose.gripper_mount.x, pose.gripper_mount.y, pose.gripper_mount.z),
-            (base_pt.x, base_pt.y, base_pt.z),
-        ) > 1e-9:
-            axis_view.plot(
-                [pose.gripper_mount.x, base_pt.x],
-                [pose.gripper_mount.y, base_pt.y],
-                [pose.gripper_mount.z, base_pt.z],
-                color="dimgray", linewidth=2,
-                label="palm" if index == 0 else None,
-            )
-    if len(bases) >= 2:
-        ring = bases + [bases[0]]
-        axis_view.plot([p.x for p in ring], [p.y for p in ring], [p.z for p in ring],
-                       color="dimgray", linewidth=2)
-    axis_view.scatter(goal.x, goal.y, goal.z, color="tab:red", s=25)
-    if isinstance(target, CartesianPoint):
-        axis_view.plot(
-            [pose.gripper_mount.x, target.x],
-            [pose.gripper_mount.y, target.y],
-            [pose.gripper_mount.z, target.z],
-            color="tab:green", linestyle=":", linewidth=1, label="target",
-        )
-
-    axis_view.set_xlabel("X (mm)")
-    axis_view.set_ylabel("Y (mm)")
-    axis_view.set_zlabel("Z (mm)")
-    axis_view.set_title(
-        f"base yaw {angles.theta_base:6.2f}   joint1 {angles.joint1:6.2f}   "
-        f"joint2 {angles.joint2:6.2f}   joint3 {angles.joint3:6.2f}   "
-        f"gripper {opening * 100:5.1f}%"
-    )
-    limits = fixed_limits or animation_limits((angles,), opening, target, config)
-    axis_view.set_xlim(*limits[0])
-    axis_view.set_ylim(*limits[1])
-    axis_view.set_zlim(*limits[2])
-    axis_view.set_box_aspect((1.0, 1.0, 1.0))
-    axis_view.legend(loc="upper left", fontsize=8)
-    axis_view.grid(True, alpha=0.25)
+    RobotView(axis_view, config).draw(angles, opening, target, fixed_limits)
 
 
 # =====================================================================
@@ -1089,17 +1243,40 @@ class _Output(ttk.Frame):
 class _Field(ttk.Frame):
     """A labelled number entry; only the opening field may be left blank."""
 
-    def __init__(self, parent, label: str, default: str, width: int = 12) -> None:
+    def __init__(self, parent, label: str, default: str, width: int = 10,
+                 pack: bool = True, label_width: int = 18,
+                 font: Optional[tuple] = None, expand: bool = True) -> None:
         super().__init__(parent)
         self.var = tk.StringVar(value=default)
-        ttk.Label(self, text=label, width=30, anchor="w").pack(side="left")
-        ttk.Entry(self, textvariable=self.var, width=width).pack(
-            side="left", fill="x", expand=True
-        )
-        self.pack(fill="x", pady=3)
+        ttk.Label(self, text=label, width=label_width, anchor="w",
+                  font=font or UI_FONT).pack(side="left", padx=(0, 4))
+        self.entry = ttk.Entry(self, textvariable=self.var, width=width,
+                               font=font or UI_FONT)
+        self.entry.pack(side="left", fill="x", expand=expand)
+        if pack:
+            self.pack(fill="x", pady=2)
 
     def get(self) -> str:
         return self.var.get().strip()
+
+
+class _SpinField(_Field):
+    """A compact labelled spinbox constrained to a joint's configured range."""
+
+    def __init__(self, parent, label: str, default: str,
+                 limits: tuple[float, float], width: int = JOINT_ENTRY_WIDTH,
+                 label_width: int = JOINT_LABEL_WIDTH) -> None:
+        super().__init__(parent, label, default, width=width, pack=False,
+                         label_width=label_width, font=VALUE_FONT, expand=False)
+        # Replace the plain entry built by _Field with a bounded spinbox.
+        self.entry.destroy()
+        low, high = limits
+        increment = 0.05 if high <= 1.0 else 1.0
+        self.entry = ttk.Spinbox(
+            self, from_=low, to=high, increment=increment,
+            textvariable=self.var, width=width, font=VALUE_FONT,
+        )
+        self.entry.pack(side="left")
 
 
 def _req_float(field: _Field, name: str) -> float:
@@ -1145,8 +1322,8 @@ class DumEApp:
             f"DUM-E - L0={config.l0:g} L1={config.l1:g} L2={config.l2:g} "
             f"L3={config.l3:g} mm, {config.finger_count}-finger gripper"
         )
-        root.geometry("1180x820")
-        root.minsize(920, 640)
+        root.geometry("1120x760")
+        root.minsize(860, 600)
 
         self.state = ensure_state_file()
         self.results: queue.Queue[tuple[int, dict | None, str | None]] = queue.Queue()
@@ -1169,6 +1346,8 @@ class DumEApp:
         self._anim_target = None
         self._anim_opening: Optional[float] = None
         self._anim_stop_requested = False
+        self._anim_start = 0.0
+        self._anim_tick = 0
 
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self._draw(self._angles, opening=self._opening)
@@ -1179,15 +1358,76 @@ class DumEApp:
         self._model_worker_thread.start()
 
     # -- shared layout ------------------------------------------------
-    def _angles_row(self, parent, prefix: str, base="45.0", j1="30.0",
-                    j2="-20.0", j3="-60.0", roll="0.0", opening="1.0") -> None:
-        setattr(self, f"{prefix}_base", _Field(parent, "Base yaw / spin (deg)", base))
-        setattr(self, f"{prefix}_j1", _Field(parent, "Joint 1 / L1 tilt (deg)", j1))
-        setattr(self, f"{prefix}_j2", _Field(parent, "Joint 2 / L2 tilt (deg)", j2))
-        setattr(self, f"{prefix}_j3", _Field(parent, "Joint 3 / L3 tilt (deg)", j3))
-        setattr(self, f"{prefix}_roll", _Field(parent, "Gripper roll (deg)", roll))
-        setattr(self, f"{prefix}_open",
-                _Field(parent, "opening 0..1 (blank = default)", opening))
+    @staticmethod
+    def _grid_field(parent, name: str, label: str, default: str,
+                    row: int, column: int, owner) -> None:
+        field = _Field(parent, label, default, pack=False)
+        field.grid(row=row, column=column, sticky="ew",
+                   padx=(0, UI_PAD_X), pady=UI_PAD_Y)
+        setattr(owner, name, field)
+
+    @staticmethod
+    def _grid_joint_field(parent, name: str, label: str, default: str,
+                          limits: tuple[float, float], row: int, column: int,
+                          owner) -> None:
+        field = _SpinField(parent, label, default, limits)
+        top = UI_PAD_Y + JOINT_TOP_PAD if row == 0 else UI_PAD_Y
+        field.grid(row=row, column=column, sticky="w",
+                   padx=(0, UI_PAD_X), pady=(top, UI_PAD_Y))
+        setattr(owner, name, field)
+
+    @staticmethod
+    def _grid_combo(parent, name: str, label: str, values, default: str,
+                    row: int, column: int, owner) -> None:
+        cell = ttk.Frame(parent)
+        cell.grid(row=row, column=column, sticky="ew",
+                  padx=(0, UI_PAD_X), pady=UI_PAD_Y)
+        ttk.Label(cell, text=label, width=18, anchor="w",
+                  font=UI_FONT).pack(side="left")
+        combo = ttk.Combobox(cell, values=values, width=10, state="readonly",
+                             font=UI_FONT)
+        combo.set(default)
+        combo.pack(side="left", fill="x", expand=True)
+        setattr(owner, name, combo)
+
+    def _joint_values(self, parent, prefix: str, base="45.0", j1="30.0",
+                      j2="-20.0", j3="-60.0", roll="0.0", opening="1.0",
+                      j3_name=None, j4_name=None, open_name=None,
+                      roll_alias=None, compact=False):
+        """Build the six editable values as one aligned ``3 x 2`` grid.
+
+        ``compact`` is accepted for older callers; the panel is always compact.
+        ``roll_alias`` keeps the old ``<prefix>_roll`` attribute working.
+        """
+        grid = ttk.Frame(parent)
+        for column in range(3):
+            grid.columnconfigure(column, weight=1, uniform="joint")
+
+        j3_name = j3_name or f"{prefix}_j3"
+        j4_name = j4_name or f"{prefix}_j4"
+        open_name = open_name or f"{prefix}_open"
+        roll_alias = roll_alias or f"{prefix}_roll"
+        fields = (
+            (f"{prefix}_base", "Base yaw", base, "base"),
+            (f"{prefix}_j1", "J1 tilt", j1, "joint1"),
+            (f"{prefix}_j2", "J2 tilt", j2, "joint2"),
+            (j3_name, "J3 tilt", j3, "joint3"),
+            (j4_name, "J4 roll", roll, "joint4"),
+            (open_name, "Grip 0..1", opening, "opening"),
+        )
+        for index, (name, label, default, key) in enumerate(fields):
+            limits = (
+                (0.0, 1.0) if key == "opening"
+                else JOINT_LIMITS[key]
+            )
+            self._grid_joint_field(grid, name, label, default, limits,
+                                   index // 3, index % 3, self)
+        setattr(self, roll_alias, getattr(self, j4_name))
+        return grid
+
+    def _angles_row(self, parent, prefix: str, **kwargs) -> None:
+        """Backward-compatible wrapper around :meth:`_joint_values`."""
+        self._joint_values(parent, prefix, **kwargs).pack(fill="x")
 
     def _read_angles(self, prefix: str) -> tuple[JointAngles, Optional[float]]:
         angles = JointAngles(
@@ -1195,7 +1435,7 @@ class DumEApp:
             _req_float(getattr(self, f"{prefix}_j1"), "joint1"),
             _req_float(getattr(self, f"{prefix}_j2"), "joint2"),
             _req_float(getattr(self, f"{prefix}_j3"), "joint3"),
-            _req_float(getattr(self, f"{prefix}_roll"), "gripper_roll"),
+            _req_float(getattr(self, f"{prefix}_j4"), "joint4"),
         )
         if not check_joint_limits(angles, self.cfg):
             out_of_range = []
@@ -1223,99 +1463,119 @@ class DumEApp:
         button row are packed at a time, so the mode swap is the same
         pack_forget trick the visualization tab already used.
         """
-        tab = ttk.Frame(parent, padding=8)
+        tab = ttk.Frame(parent, padding=6)
         tab.pack(fill="both", expand=True)
 
+        style = ttk.Style()
+        style.configure("TButton", font=UI_FONT)
+        style.configure("TRadiobutton", font=UI_FONT)
+        style.configure("TLabelframe.Label", font=UI_FONT)
+
+        # Mode choices and the active button row share one aligned header strip.
+        header = ttk.Frame(tab)
+        header.pack(fill="x", pady=(0, UI_PAD_Y))
         self.viz_mode = tk.StringVar(value="command")
-        radios = ttk.Frame(tab)
-        radios.pack(fill="x")
+        radios = ttk.Frame(header)
+        radios.pack(side="left")
         for label, value in (("Command", "command"),
-                             ("From joint angles", "angles"),
-                             ("From XYZ target", "target")):
+                             ("Joint angles", "angles"),
+                             ("XYZ target", "target")):
             ttk.Radiobutton(radios, text=label, variable=self.viz_mode,
-                            value=value, command=self._toggle_mode).pack(side="left", padx=4)
+                            value=value, command=self._toggle_mode).pack(
+                                side="left", padx=(0, 10))
+        ttk.Separator(header, orient="vertical").pack(
+            side="left", fill="y", padx=(2, 8))
+        button_host = ttk.Frame(header)
+        button_host.pack(side="right")
 
         # -- input frames, one per mode
-        self.cmd_frame = ttk.LabelFrame(tab, text="Tell Dum-E what to do", padding=8)
-        self.cmd_text = tk.Text(self.cmd_frame, height=3, wrap="word",
-                                font=("Segoe UI", 11))
+        self.cmd_frame = ttk.LabelFrame(tab, text="Tell Dum-E what to do",
+                                        padding=(6, PANEL_TOP_PAD))
+        self.cmd_text = tk.Text(self.cmd_frame, height=2, wrap="word",
+                                font=("Segoe UI", 10))
         self.cmd_text.pack(side="left", fill="both", expand=True)
         self.cmd_text.bind("<Control-Return>", lambda _e: self.submit_command())
 
-        self.viz_ang = ttk.LabelFrame(tab, text="Joint angles", padding=8)
+        self.viz_ang = ttk.LabelFrame(tab, text="Joint values",
+                                      padding=(6, PANEL_TOP_PAD))
         self._angles_row(self.viz_ang, "v")
 
         self.viz_tgt = ttk.LabelFrame(tab, text="XYZ target grip point (world, mm)",
-                                       padding=8)
-        self.v_x = _Field(self.viz_tgt, "x (mm)", "300.0")
-        self.v_y = _Field(self.viz_tgt, "y (mm)", "120.0")
-        self.v_z = _Field(self.viz_tgt, "z (mm)", "150.0")
-        row = ttk.Frame(self.viz_tgt)
-        ttk.Label(row, text="joint3 / L3 tilt (deg)", width=30, anchor="w").pack(side="left")
-        self.v_tgt_j3 = ttk.Combobox(row, values=JOINT3_CHOICES, width=10, state="readonly")
-        self.v_tgt_j3.set("auto")
-        self.v_tgt_j3.pack(side="left", fill="x", expand=True)
-        row.pack(fill="x", pady=3)
-        self.v_open_t = _Field(self.viz_tgt, "opening 0..1 (blank = default)", "1.0")
-        self.v_roll_t = _Field(
-            self.viz_tgt, "gripper roll (blank = current/0 deg)", ""
-        )
-        row = ttk.Frame(self.viz_tgt)
-        ttk.Label(row, text="joint2 pose", width=30, anchor="w").pack(side="left")
-        self.v_mode = ttk.Combobox(row, values=("up", "down"), width=10, state="readonly")
-        self.v_mode.set("up")
-        self.v_mode.pack(side="left", fill="x", expand=True)
-        row.pack(fill="x", pady=3)
+                                       padding=(6, PANEL_TOP_PAD))
+        self.viz_tgt.columnconfigure(0, weight=1)
+        self.viz_tgt.columnconfigure(1, weight=1)
+        self._grid_field(self.viz_tgt, "v_x", "x (mm)", "300.0", 0, 0, self)
+        self._grid_field(self.viz_tgt, "v_y", "y (mm)", "120.0", 0, 1, self)
+        self._grid_field(self.viz_tgt, "v_z", "z (mm)", "150.0", 1, 0, self)
+        self._grid_combo(self.viz_tgt, "v_tgt_j3", "Joint 3", JOINT3_CHOICES,
+                         "auto", 1, 1, self)
+        self._grid_field(self.viz_tgt, "v_open_t", "Opening 0..1", "1.0", 2, 0, self)
+        self._grid_field(self.viz_tgt, "v_roll_t", "J4 wrist roll", "", 2, 1, self)
+        self._grid_combo(self.viz_tgt, "v_mode", "Joint 2 pose", ("up", "down"),
+                         "up", 3, 0, self)
 
         # -- button rows, one per mode
-        self.cmd_buttons = ttk.Frame(tab)
+        self.cmd_buttons = ttk.Frame(button_host)
         ttk.Button(self.cmd_buttons, text="Send  (Ctrl+Enter)",
-                   command=self.submit_command).pack(side="left", padx=3)
+                   command=self.submit_command,
+                   padding=(6, 2)).pack(side="left", padx=3)
         self.cmd_stop_btn = ttk.Button(self.cmd_buttons, text="Stop",
-                                       command=self.stop_now)
+                                       command=self.stop_now, padding=(6, 2))
         self.cmd_stop_btn.pack(side="left", padx=3)
 
-        self.viz_buttons = ttk.Frame(tab)
-        self.viz_plot_btn = ttk.Button(self.viz_buttons, text="Plot robot",
-                                       command=self._do_viz_plot)
+        self.viz_buttons = ttk.Frame(button_host)
+        self.viz_plot_btn = ttk.Button(self.viz_buttons, text="Plot",
+                                       command=self._do_viz_plot, padding=(6, 2))
         self.viz_plot_btn.pack(side="left", padx=3)
-        ttk.Button(self.viz_buttons, text="Clear", command=self._viz_clear).pack(side="left", padx=3)
+        ttk.Button(self.viz_buttons, text="Clear", command=self._viz_clear,
+                   padding=(6, 2)).pack(side="left", padx=3)
         self.viz_anim_btn = ttk.Button(self.viz_buttons, text="Animate",
-                                       command=self._anim_run)
+                                       command=self._anim_run, padding=(6, 2))
         self.viz_anim_btn.pack(side="left", padx=3)
 
         self.cmd_status = tk.StringVar(value="Ready")
-        ttk.Label(tab, textvariable=self.cmd_status).pack(anchor="w", pady=(4, 0))
+        ttk.Label(tab, textvariable=self.cmd_status, anchor="w",
+                  font=UI_FONT).pack(fill="x", pady=(2, 0))
 
         # -- the one canvas, plus the pose and activity side pane
         panes = ttk.Panedwindow(tab, orient="horizontal")
         self.viz_panes = panes
-        panes.pack(fill="both", expand=True, pady=(6, 0))
+        panes.pack(fill="both", expand=True, pady=(UI_PAD_Y, 0))
         canvas_frame = ttk.Frame(panes)
-        side = ttk.Frame(panes, padding=(10, 0, 0, 0))
-        panes.add(canvas_frame, weight=4)
+        side = ttk.Frame(panes, padding=(UI_PAD_X, 0, 0, 0))
+        panes.add(canvas_frame, weight=6)
         panes.add(side, weight=1)
 
         self.viz_fig = _new_figure((7.2, 4.6))
         self.viz_ax = self.viz_fig.add_subplot(111, projection="3d")
+        # Let the 3-D view use more of the canvas while leaving tick labels.
+        self.viz_fig.subplots_adjust(left=0.03, right=0.985,
+                                     bottom=0.03, top=0.97)
         self.viz_canvas = _new_canvas(self.viz_fig, canvas_frame)
         _new_toolbar(self.viz_canvas, canvas_frame)
+        self.viz_view = RobotView(self.viz_ax, self.cfg)
 
-        pose_frame = ttk.LabelFrame(side, text="Remembered pose", padding=10)
+        pose_frame = ttk.LabelFrame(side, text="Remembered pose", padding=6)
         pose_frame.pack(fill="x")
+        pose_grid = ttk.Frame(pose_frame)
+        pose_grid.pack(fill="x")
+        pose_grid.columnconfigure(0, weight=1)
         self.pose_labels: dict[str, ttk.Label] = {}
-        for key in ALL_JOINTS:
-            row = ttk.Frame(pose_frame)
-            row.pack(fill="x", pady=2)
-            ttk.Label(row, text=key, width=10).pack(side="left")
-            label = ttk.Label(row, text="-", font=("Consolas", 10, "bold"))
-            label.pack(side="right")
+        for row, key in enumerate(POSE_KEYS):
+            ttk.Label(pose_grid, text=POSE_LABELS[key], width=6,
+                      anchor="w", font=UI_FONT).grid(
+                          row=row, column=0, sticky="w", pady=1)
+            label = ttk.Label(pose_grid, text="-", font=VALUE_FONT,
+                              anchor="e")
+            label.grid(row=row, column=1, sticky="e", pady=1)
             self.pose_labels[key] = label
 
-        log_frame = ttk.LabelFrame(side, text="Activity", padding=8)
-        log_frame.pack(fill="both", expand=True, pady=(10, 0))
-        self.cmd_log = tk.Text(log_frame, height=10, state="disabled", wrap="word",
-                               font=("Segoe UI", 9))
+        log_frame = ttk.LabelFrame(side, text="Activity", padding=6)
+        log_frame.pack(fill="both", expand=True, pady=(UI_PAD_Y * 2, 0))
+        # A narrow text widget keeps the side pane compact so the 3-D canvas
+        # gets the space instead of an 80-column default Text request.
+        self.cmd_log = tk.Text(log_frame, height=8, width=28,
+                               state="disabled", wrap="word", font=UI_FONT)
         bar = ttk.Scrollbar(log_frame, command=self.cmd_log.yview)
         self.cmd_log.configure(yscrollcommand=bar.set)
         self.cmd_log.pack(side="left", fill="both", expand=True)
@@ -1332,14 +1592,17 @@ class DumEApp:
         for buttons in (self.cmd_buttons, self.viz_buttons):
             buttons.pack_forget()
         if mode == "command":
-            self.cmd_frame.pack(fill="x", pady=(6, 0), before=self.viz_panes)
-            self.cmd_buttons.pack(fill="x", pady=4, before=self.viz_panes)
+            self.cmd_frame.pack(fill="x", pady=(UI_PAD_Y, 0),
+                                before=self.viz_panes)
+            self.cmd_buttons.pack(side="left")
         elif mode == "angles":
-            self.viz_ang.pack(fill="x", pady=(6, 0), before=self.viz_panes)
-            self.viz_buttons.pack(fill="x", pady=4, before=self.viz_panes)
+            self.viz_ang.pack(fill="x", pady=(UI_PAD_Y, 0),
+                              before=self.viz_panes)
+            self.viz_buttons.pack(side="left")
         else:
-            self.viz_tgt.pack(fill="x", pady=(6, 0), before=self.viz_panes)
-            self.viz_buttons.pack(fill="x", pady=4, before=self.viz_panes)
+            self.viz_tgt.pack(fill="x", pady=(UI_PAD_Y, 0),
+                              before=self.viz_panes)
+            self.viz_buttons.pack(side="left")
 
     def _log(self, message: str) -> None:
         self.cmd_log.configure(state="normal")
@@ -1348,9 +1611,10 @@ class DumEApp:
         self.cmd_log.configure(state="disabled")
 
     def _refresh_pose_labels(self) -> None:
-        for key in ALL_JOINTS:
-            suffix = "%" if key == "gripper" else " deg"
-            self.pose_labels[key].configure(text=f"{self.state[key]:g}{suffix}")
+        for key in POSE_KEYS:
+            value = self.state["gripper_roll"] if key == "joint4" else self.state[key]
+            unit = "%" if key == "gripper" else "°"
+            self.pose_labels[key].configure(text=f"{value:g}{unit}")
 
     def _persist_visual_pose(self, angles: Optional[JointAngles] = None,
                              opening: Optional[float] = None) -> None:
@@ -1368,7 +1632,7 @@ class DumEApp:
             "joint1": resolved_angles.joint1,
             "joint2": resolved_angles.joint2,
             "joint3": resolved_angles.joint3,
-            "gripper_roll": resolved_angles.gripper_roll,
+            "gripper_roll": resolved_angles.joint4,
             "gripper": 100.0 * opening,
         }
         save_pose_state(pose)
@@ -1505,7 +1769,7 @@ class DumEApp:
         roll_text = self.v_roll_t.get().strip()
         roll = (
             float(roll_text) if roll_text
-            else (self._angles.gripper_roll if self._angles is not None else 0.0)
+            else (self._angles.joint4 if self._angles is not None else 0.0)
         )
         target = CartesianPoint(x, y, z)
         angles = inverse_kinematics(x, y, z, joint2_up=self.v_mode.get() != "down",
@@ -1525,18 +1789,58 @@ class DumEApp:
         self._draw(angles, opening=opening, target=target)
 
     def _viz_clear(self) -> None:
-        self.viz_ax.clear()
+        self.viz_view.clear()
         self.viz_canvas.draw_idle()
 
     def _draw(self, angles: JointAngles, opening: Optional[float] = None, target=None,
               fixed_limits=None) -> None:
-        draw_robot(self.viz_ax, angles, self.cfg.gripper_opening if opening is None
-                   else opening, self.cfg, target, fixed_limits)
+        self.viz_view.draw(angles, opening, target, fixed_limits)
         self.viz_canvas.draw_idle()
         self._angles = angles
         self._opening = self.cfg.gripper_opening if opening is None else opening
 
     # -- animation ----------------------------------------------------
+    def _cancel_anim_job(self) -> None:
+        """Drop a pending frame so a new move cannot leave two timers running."""
+        if self._anim_job is not None:
+            try:
+                self.root.after_cancel(self._anim_job)
+            except tk.TclError:
+                pass
+            self._anim_job = None
+
+    def _start_animation(self, goal: JointAngles, opening: Optional[float],
+                         target: Any, from_opening: Optional[float],
+                         start: Optional[JointAngles] = None) -> None:
+        """Prepare the frames and start a wall-clock paced animation.
+
+        The timer targets one tick every ``VIZ_ANIM_FRAME_MS``. If a redraw takes
+        longer, the next tick is due immediately and the step below jumps to
+        the right frame; the move still takes the same time and never queues up
+        stale frames.
+        """
+        self._cancel_anim_job()
+        target_opening = self.cfg.gripper_opening if opening is None else opening
+        if from_opening is None:
+            from_opening = target_opening
+        start_angles = start if start is not None else (self._angles or goal)
+        self._anim_frames = interpolate_joints(start_angles, goal)
+        self._anim_openings = interpolate_opening(
+            from_opening, target_opening, len(self._anim_frames)
+        )
+        self._anim_limits = animation_limits(
+            self._anim_frames, self._anim_openings, target, self.cfg
+        )
+        self._anim_idx = 0
+        self._anim_target = target
+        self._anim_opening = target_opening
+        self._anim_stop_requested = False
+        self._anim_start = time.perf_counter()
+        self._anim_tick = 1
+        self.viz_anim_btn.configure(text="Stop")
+        self.viz_plot_btn.configure(state="disabled")
+        self._anim_step()
+
     def _anim_run(self) -> None:
         if self._anim_job is not None:
             self._anim_stop()
@@ -1561,46 +1865,46 @@ class DumEApp:
                 "animate. Change the inputs and try again.",
             )
             return
-        self._anim_frames = interpolate_joints(start, goal)
-        self._anim_openings = interpolate_opening(
-            start_opening, target_opening, len(self._anim_frames)
-        )
-        self._anim_limits = animation_limits(
-            self._anim_frames, self._anim_openings, target, self.cfg
-        )
-        self._anim_idx = 0
-        self._anim_target = target
-        self._anim_opening = target_opening
-        self._anim_stop_requested = False
-        self.viz_anim_btn.configure(text="Stop")
-        self.viz_plot_btn.configure(state="disabled")
-        self._anim_step()
+        self._start_animation(goal, opening, target, start_opening, start=start)
 
     def _anim_step(self) -> None:
-        if self._anim_idx >= len(self._anim_frames):
+        if not self._anim_frames or self._anim_stop_requested:
             self._anim_finish()
             return
-        angles = self._anim_frames[self._anim_idx]
-        opening = self._anim_openings[self._anim_idx]
-        self._anim_idx += 1
-        self._draw(angles, opening, self._anim_target, self._anim_limits)
-        if self._anim_idx >= len(self._anim_frames):
+        frame_count = len(self._anim_frames)
+        duration_ms = (frame_count - 1) * VIZ_ANIM_FRAME_MS
+        elapsed_ms = (time.perf_counter() - self._anim_start) * 1000.0
+        progress = min(1.0, elapsed_ms / duration_ms) if duration_ms > 0 else 1.0
+        index = min(int(progress * (frame_count - 1)), frame_count - 1)
+        self._anim_idx = index + 1
+        self._draw(self._anim_frames[index], self._anim_openings[index],
+                   self._anim_target, self._anim_limits)
+        if index >= frame_count - 1:
             self._anim_finish()
-        elif not self._anim_stop_requested:
-            self._anim_job = self.root.after(VIZ_ANIM_INTERVAL_MS, self._anim_step)
+            return
+
+        # Aim at the next absolute tick, not "N ms after this draw finished".
+        # A slow frame therefore costs a skipped frame, not a slower animation.
+        self._anim_tick = max(self._anim_tick, index + 1)
+        next_at = self._anim_start + self._anim_tick * VIZ_ANIM_FRAME_MS / 1000.0
+        delay_ms = max(0.0, (next_at - time.perf_counter()) * 1000.0)
+        if self._anim_stop_requested:
+            return
+        try:
+            self._anim_job = self.root.after(int(delay_ms), self._anim_step)
+        except tk.TclError:
+            self._anim_finish()
 
     def _anim_stop(self) -> None:
         self._anim_stop_requested = True
-        if self._anim_job is not None:
-            try:
-                self.root.after_cancel(self._anim_job)
-            except tk.TclError:
-                pass
-            self._anim_job = None
+        self._cancel_anim_job()
         self._anim_finish()
 
     def _anim_finish(self) -> None:
         self._anim_job = None
+        canvas = getattr(self, "viz_canvas", None)
+        if canvas is not None:
+            canvas.draw_idle()
         self.viz_anim_btn.configure(text="Animate")
         self.viz_plot_btn.configure(state="normal")
 
@@ -1614,25 +1918,10 @@ class DumEApp:
         in the Remembered pose panel, which _apply_command refreshes.
         """
         if animate:
-            target_opening = self.cfg.gripper_opening if opening is None else opening
-            if from_opening is None:
-                from_opening = target_opening
-            start_angles = self._angles or angles
-            self._anim_frames = interpolate_joints(start_angles, angles)
-            self._anim_openings = interpolate_opening(
-                from_opening, target_opening, len(self._anim_frames)
-            )
-            self._anim_limits = animation_limits(
-                self._anim_frames, self._anim_openings, None, self.cfg
-            )
-            self._anim_idx = 0
-            self._anim_target = None
-            self._anim_opening = target_opening
-            self._anim_stop_requested = False
-            self.viz_anim_btn.configure(text="Stop")
-            self.viz_plot_btn.configure(state="disabled")
-            self._anim_step()
+            self._start_animation(angles, opening, target, from_opening,
+                                  start=self._angles)
         else:
+            self._cancel_anim_job()
             self._draw(angles, opening, target)
 
     def close(self) -> None:
@@ -1657,7 +1946,7 @@ class DumEApp:
 
 def _same_pose(a: JointAngles, b: JointAngles, tol: float = 1e-3) -> bool:
     return all(abs(getattr(a, f) - getattr(b, f)) <= tol
-               for f in ("theta_base", "joint1", "joint2", "joint3", "gripper_roll"))
+               for f in ("theta_base", "joint1", "joint2", "joint3", "joint4"))
 
 
 def _new_figure(size):

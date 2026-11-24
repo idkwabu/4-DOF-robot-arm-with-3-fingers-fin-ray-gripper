@@ -9,6 +9,8 @@ JOINT_LIMITS: Mapping[str, tuple[float, float]] = MappingProxyType(
         "joint1": (-90.0, 90.0),
         "joint2": (-150.0, 150.0),
         "joint3": (-120.0, 120.0),
+        "joint4": (-180.0, 180.0),
+        # Legacy name for joint4, kept for saved poses and the servo bridge.
         "gripper_roll": (-180.0, 180.0),
     }
 )

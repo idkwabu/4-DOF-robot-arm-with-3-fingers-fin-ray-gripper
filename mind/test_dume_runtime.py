@@ -34,6 +34,17 @@ class DumERuntimeTests(unittest.TestCase):
         self.assertEqual(command["gripper_roll"], 135)
         self.assertTrue(dume.is_valid_command(command))
 
+    def test_joint4_is_canonical_and_recognized_by_the_parser(self):
+        angles = dume.JointAngles(0.0, 0.0, 0.0, 0.0, 90.0)
+        self.assertEqual(angles.joint4, 90.0)
+        self.assertEqual(angles.gripper_roll, 90.0)
+
+        for phrase in ("set joint4 to 90", "set joint 4 to 90", "wrist roll 90"):
+            with self.subTest(phrase=phrase):
+                command = dume.build_local_command(phrase)
+                self.assertIsNotNone(command)
+                self.assertEqual(command["gripper_roll"], 90)
+
     def test_bare_down_is_resolved_without_model_inference(self):
         command = dume.build_local_command("down")
 
@@ -48,6 +59,110 @@ class DumERuntimeTests(unittest.TestCase):
         self.assertFalse(dume._same_pose(start, rolled))
         self.assertTrue(dume._same_pose(start, start))
 
+    def test_base_interpolation_takes_the_shortest_way_round(self):
+        frames = dume.interpolate_joints(
+            dume.JointAngles(170.0, 0.0, 0.0, 0.0),
+            dume.JointAngles(-170.0, 0.0, 0.0, 0.0),
+            frames=5,
+        )
+
+        # Wrapping 190 deg to -170 deg is the same physical yaw; the arm must
+        # not sweep the long way through 0 deg just because the numbers cross.
+        self.assertEqual(frames[0].theta_base, 170.0)
+        self.assertEqual(frames[-1].theta_base, -170.0)
+        self.assertTrue(all(abs(f.theta_base) >= 170.0 for f in frames))
+
+    def test_animation_limits_include_the_base_without_wasting_space(self):
+        angles = dume.JointAngles(45.0, 30.0, -20.0, -60.0)
+        limits = dume.animation_limits((angles,), 1.0, None)
+
+        self.assertEqual(len(limits), 3)
+        self.assertTrue(all(lo <= 0.0 <= hi for lo, hi in limits))
+        spans = [hi - lo for lo, hi in limits]
+        self.assertTrue(all(math.isclose(s, spans[0]) for s in spans))
+        # A tight frame is not the old symmetric +/-span box.
+        self.assertTrue(any(not math.isclose(lo, -hi) for lo, hi in limits))
+
+    def test_robot_view_draws_a_reusable_grid(self):
+        captured = {}
+        view = dume.RobotView.__new__(dume.RobotView)
+        view._GRID_LINES = 3
+        view._grid = SimpleNamespace(
+            set_data_3d=lambda *arrays: captured.setdefault("arrays", arrays)
+        )
+
+        dume.RobotView._draw_grid(
+            view, ((-100.0, 100.0), (-100.0, 100.0), (-100.0, 100.0))
+        )
+
+        xs, ys, zs = captured["arrays"]
+        self.assertGreater(len(xs), 12)
+        self.assertTrue(any(math.isnan(value) for value in xs))
+        # The three coordinate planes pass through the base at (0, 0, 0).
+        self.assertIn(0.0, xs)
+        self.assertIn(0.0, ys)
+        self.assertIn(0.0, zs)
+        self.assertTrue(all(-100.0 <= value <= 100.0 or math.isnan(value)
+                            for value in (*xs, *ys, *zs)))
+
+    def test_anim_step_jumps_to_the_frame_due_at_elapsed_time(self):
+        frames = tuple(range(6))
+        delays = []
+        drawn = []
+        app = SimpleNamespace(
+            _anim_frames=frames,
+            _anim_openings=tuple(float(i) for i in frames),
+            _anim_stop_requested=False,
+            _anim_start=0.0,
+            _anim_tick=1,
+            _anim_idx=0,
+            _anim_job="old",
+            _anim_target=None,
+            _anim_limits=None,
+            _draw=lambda *args: drawn.append(args),
+            root=SimpleNamespace(after=lambda delay, callback: delays.append(delay) or "new"),
+            viz_anim_btn=SimpleNamespace(configure=lambda **kwargs: None),
+            viz_plot_btn=SimpleNamespace(configure=lambda **kwargs: None),
+            _anim_finish=lambda: setattr(app, "_anim_job", None),
+        )
+        app._anim_step = lambda: dume.DumEApp._anim_step(app)
+        with patch.object(dume.time, "perf_counter", side_effect=[0.05, 0.05]):
+            dume.DumEApp._anim_step(app)
+
+        self.assertEqual([args[0] for args in drawn], [3])
+        self.assertEqual(app._anim_idx, 4)
+        self.assertEqual(app._anim_job, "new")
+        # Five intervals of 16 ms; frame 4 is due at 64 ms, now is 50 ms.
+        self.assertEqual(len(delays), 1)
+        self.assertAlmostEqual(delays[0], 14, delta=1)
+
+    def test_slow_anim_step_finishes_instead_of_stretching_the_move(self):
+        frames = tuple(range(6))
+        drawn = []
+        app = SimpleNamespace(
+            _anim_frames=frames,
+            _anim_openings=tuple(float(i) for i in frames),
+            _anim_stop_requested=False,
+            _anim_start=0.0,
+            _anim_tick=1,
+            _anim_idx=0,
+            _anim_job="old",
+            _anim_target=None,
+            _anim_limits=None,
+            _draw=lambda *args: drawn.append(args),
+            root=SimpleNamespace(after=lambda delay, callback: self.fail("no more frames")),
+            viz_anim_btn=SimpleNamespace(configure=lambda **kwargs: None),
+            viz_plot_btn=SimpleNamespace(configure=lambda **kwargs: None),
+            _anim_finish=lambda: setattr(app, "_anim_job", None),
+        )
+        app._anim_step = lambda: dume.DumEApp._anim_step(app)
+        with patch.object(dume.time, "perf_counter", return_value=0.2):
+            dume.DumEApp._anim_step(app)
+
+        self.assertEqual([args[0] for args in drawn], [5])
+        self.assertEqual(app._anim_idx, 6)
+        self.assertIsNone(app._anim_job)
+
     def test_mode_controls_are_packed_above_visualization(self):
         app = dume.DumEApp.__new__(dume.DumEApp)
         app.viz_mode = type("Mode", (), {"get": lambda self: "target"})()
@@ -61,11 +176,9 @@ class DumERuntimeTests(unittest.TestCase):
         app._toggle_mode()
 
         app.viz_tgt.pack.assert_called_once_with(
-            fill="x", pady=(6, 0), before=app.viz_panes
+            fill="x", pady=(4, 0), before=app.viz_panes
         )
-        app.viz_buttons.pack.assert_called_once_with(
-            fill="x", pady=4, before=app.viz_panes
-        )
+        app.viz_buttons.pack.assert_called_once_with(side="left")
 
     def test_joint_limit_error_reports_only_the_invalid_joint_range(self):
         app = dume.DumEApp.__new__(dume.DumEApp)
@@ -75,14 +188,14 @@ class DumERuntimeTests(unittest.TestCase):
             "j1": "0",
             "j2": "0",
             "j3": "0",
-            "roll": "181",
+            "j4": "181",
             "open": "1",
         }
         for field, value in values.items():
             setattr(app, f"v_{field}", SimpleNamespace(get=lambda v=value: v))
 
         with self.assertRaisesRegex(
-            ValueError, r"gripper_roll 181 is outside -180\.\.180"
+            ValueError, r"joint4 181 is outside -180\.\.180"
         ):
             app._read_angles("v")
 

@@ -1,12 +1,20 @@
 import math
 import unittest
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import robot_arm as ra
+import robot_arm_gui as ragui
 from robot_arm_gui import RobotArmApp, _same_pose
 
 
 class RobotArmFacadeTests(unittest.TestCase):
+    def test_joint4_is_the_canonical_wrist_roll_field(self):
+        angles = ra.JointAngles(0.0, 0.0, 0.0, 0.0, 135.0)
+
+        self.assertEqual(angles.joint4, 135.0)
+        self.assertEqual(angles.gripper_roll, 135.0)
+
     def test_default_geometry_matches_robot_dimensions(self):
         config = ra.DEFAULT_CONFIG
         self.assertEqual(
@@ -21,6 +29,7 @@ class RobotArmFacadeTests(unittest.TestCase):
                 "joint1": (-90.0, 90.0),
                 "joint2": (-150.0, 150.0),
                 "joint3": (-120.0, 120.0),
+                "joint4": (-180.0, 180.0),
                 "gripper_roll": (-180.0, 180.0),
             },
         )
@@ -236,6 +245,45 @@ class RobotArmFacadeTests(unittest.TestCase):
         self.assertEqual((frames[0].gripper_roll, frames[-1].gripper_roll), (170.0, -170.0))
         self.assertEqual(abs(frames[1].gripper_roll), 180.0)
 
+    def test_base_interpolation_takes_the_shortest_way_round(self):
+        frames = ra.interpolate_joints(
+            ra.JointAngles(170.0, 0.0, 0.0, 0.0),
+            ra.JointAngles(-170.0, 0.0, 0.0, 0.0),
+            frames=5,
+        )
+        self.assertEqual(frames[0].theta_base, 170.0)
+        self.assertEqual(frames[-1].theta_base, -170.0)
+        self.assertTrue(all(abs(f.theta_base) >= 170.0 for f in frames))
+
+    def test_animation_limits_include_the_base_without_wasting_space(self):
+        angles = ra.JointAngles(45.0, 30.0, -20.0, -60.0)
+        limits = ra.animation_limits((angles,), opening=1.0)
+
+        self.assertEqual(len(limits), 3)
+        self.assertTrue(all(lo <= 0.0 <= hi for lo, hi in limits))
+        spans = [hi - lo for lo, hi in limits]
+        self.assertTrue(all(math.isclose(s, spans[0]) for s in spans))
+        self.assertTrue(any(not math.isclose(lo, -hi) for lo, hi in limits))
+
+    def test_robot_view_draws_a_reusable_grid(self):
+        captured = {}
+        view = ra.RobotView.__new__(ra.RobotView)
+        view._GRID_LINES = 3
+        view._grid = SimpleNamespace(
+            set_data_3d=lambda *arrays: captured.setdefault("arrays", arrays)
+        )
+
+        ra.RobotView._draw_grid(view, ((-100.0, 100.0),) * 3)
+
+        xs, ys, zs = captured["arrays"]
+        self.assertGreater(len(xs), 12)
+        self.assertTrue(any(math.isnan(value) for value in xs))
+        self.assertIn(0.0, xs)
+        self.assertIn(0.0, ys)
+        self.assertIn(0.0, zs)
+        self.assertTrue(all(-100.0 <= value <= 100.0 or math.isnan(value)
+                            for value in (*xs, *ys, *zs)))
+
 
 class RobotArmGuiTests(unittest.TestCase):
     def test_roll_only_change_is_a_distinct_pose(self):
@@ -263,6 +311,63 @@ class RobotArmGuiTests(unittest.TestCase):
         app.v_j3_ang.var.set.assert_called_once_with("-45.000")
         app.v_roll_ang.var.set.assert_called_once_with("0.000")
         app._draw.assert_called_once_with(angles, target, 0.5)
+
+    def test_anim_step_jumps_to_the_frame_due_at_elapsed_time(self):
+        frames = tuple(range(6))
+        delays = []
+        drawn = []
+        app = SimpleNamespace(
+            _anim_frames=frames,
+            _anim_openings=tuple(float(i) for i in frames),
+            _anim_stop_requested=False,
+            _anim_start=0.0,
+            _anim_tick=1,
+            _anim_idx=0,
+            _anim_job="old",
+            _anim_target=None,
+            _anim_limits=None,
+            _draw=lambda *args: drawn.append(args),
+            root=SimpleNamespace(after=lambda delay, callback: delays.append(delay) or "new"),
+            viz_anim_btn=SimpleNamespace(configure=lambda **kwargs: None),
+            viz_plot_btn=SimpleNamespace(configure=lambda **kwargs: None),
+            _anim_finish=lambda: setattr(app, "_anim_job", None),
+        )
+        app._anim_step = lambda: RobotArmApp._anim_step(app)
+        with patch.object(ragui.time, "perf_counter", side_effect=[0.05, 0.05]):
+            RobotArmApp._anim_step(app)
+
+        self.assertEqual([args[0] for args in drawn], [3])
+        self.assertEqual(app._anim_idx, 4)
+        self.assertEqual(app._anim_job, "new")
+        self.assertEqual(len(delays), 1)
+        self.assertAlmostEqual(delays[0], 14, delta=1)
+
+    def test_slow_anim_step_finishes_instead_of_stretching_the_move(self):
+        frames = tuple(range(6))
+        drawn = []
+        app = SimpleNamespace(
+            _anim_frames=frames,
+            _anim_openings=tuple(float(i) for i in frames),
+            _anim_stop_requested=False,
+            _anim_start=0.0,
+            _anim_tick=1,
+            _anim_idx=0,
+            _anim_job="old",
+            _anim_target=None,
+            _anim_limits=None,
+            _draw=lambda *args: drawn.append(args),
+            root=SimpleNamespace(after=lambda delay, callback: self.fail("no more frames")),
+            viz_anim_btn=SimpleNamespace(configure=lambda **kwargs: None),
+            viz_plot_btn=SimpleNamespace(configure=lambda **kwargs: None),
+            _anim_finish=lambda: setattr(app, "_anim_job", None),
+        )
+        app._anim_step = lambda: RobotArmApp._anim_step(app)
+        with patch.object(ragui.time, "perf_counter", return_value=0.2):
+            RobotArmApp._anim_step(app)
+
+        self.assertEqual([args[0] for args in drawn], [5])
+        self.assertEqual(app._anim_idx, 6)
+        self.assertIsNone(app._anim_job)
 
 
 if __name__ == "__main__":

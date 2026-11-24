@@ -28,7 +28,10 @@ def load_servo_positions(path: Path) -> tuple[int, ...]:
 
     positions = []
     for joint in JOINTS:
-        value = state.get(joint, 0 if joint == "gripper_roll" else None)
+        if joint == "gripper_roll" and joint not in state and "joint4" in state:
+            value = state["joint4"]
+        else:
+            value = state.get(joint, 0 if joint == "gripper_roll" else None)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"{path}: {joint} must be a number.")
         minimum, maximum = JOINT_RANGES[joint]
