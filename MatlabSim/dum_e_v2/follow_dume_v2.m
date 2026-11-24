@@ -1,4 +1,4 @@
-function follow_dume_v2(startGui, stopTime, moveDuration)
+function follow_dume_v2(startGui, stopTime, moveDuration, stateFile)
 %FOLLOW_DUME_V2 Continuously animate DUM-E poses in Simscape.
 % Run in MATLAB with:
 %   cd('D:\Dum-E\MatlabSim\dum_e_v2')
@@ -15,12 +15,16 @@ end
 if nargin < 3
     moveDuration = 0.5;
 end
+if nargin < 4
+    stateFile = '';
+end
 validateattributes(startGui, {'logical','numeric'}, {'scalar'});
 validateattributes(stopTime, {'numeric'}, {'scalar','real','positive','finite'});
 validateattributes(moveDuration, {'numeric'}, {'scalar','real','positive','finite'});
 
 gripperClosedDeg = -120;
 gripperOpenDeg = 65;
+gripperFingerOpenDeg = 40;
 jointNames = {
     'base_yaw_joint'
     'shoulder_pitch_joint'
@@ -28,11 +32,20 @@ jointNames = {
     'wrist_pitch_joint'
     'wrist_roll_joint'
     'gripper_servo_pivot_joint'
+    'gripper_finger_1_pivot_joint'
+    'gripper_finger_2_pivot_joint'
+    'gripper_finger_3_pivot_joint'
 };
 
 modelFolder = fileparts(mfilename('fullpath'));
 projectFolder = fileparts(fileparts(modelFolder));
-stateFile = fullfile(projectFolder, 'robot_state.json');
+if isempty(stateFile)
+    stateFile = fullfile(projectFolder, 'robot_state.json');
+elseif isstring(stateFile) && isscalar(stateFile)
+    stateFile = char(stateFile);
+elseif ~ischar(stateFile) || ~isrow(stateFile)
+    error('The optional state-file argument must be a character vector or scalar string.');
+end
 guiFile = fullfile(projectFolder, 'Dum-E.py');
 pythonExe = fullfile(projectFolder, '.venv', 'Scripts', 'python.exe');
 oldFolder = cd(modelFolder);
@@ -51,25 +64,42 @@ if startGui
 end
 
 waitForStateFile(stateFile, 30);
-initialPose = read_dume_pose(stateFile, gripperClosedDeg, gripperOpenDeg);
+[initialPose, initialState] = read_dume_pose( ...
+    stateFile, gripperClosedDeg, gripperOpenDeg);
+initialFingerAngle = deg2rad( ...
+    gripperFingerOpenDeg*(initialState.gripper/100));
+initialPose = [initialPose; repmat(initialFingerAngle, 3, 1)];
 
-modelName = 'dum_e_simscape_generated';
-modelFile = fullfile(modelFolder, [modelName '.slx']);
-if bdIsLoaded(modelName)
-    if ~strcmp(get_param(modelName, 'SimulationStatus'), 'stopped')
-        error('Stop the existing %s simulation before starting the DUM-E follower.', modelName);
+sourceModelName = 'dum_e_simscape_generated';
+sourceModelFile = fullfile(modelFolder, [sourceModelName '.slx']);
+if bdIsLoaded(sourceModelName) && ...
+        ~strcmp(get_param(sourceModelName, 'SimulationStatus'), 'stopped')
+    error('Stop the existing %s simulation before starting the DUM-E follower.', ...
+        sourceModelName);
+end
+if ~isfile(sourceModelFile)
+    if ~bdIsLoaded(sourceModelName)
+        import_dume_simscape();
     end
-    model = modelName;
-elseif isfile(modelFile)
-    load_system(modelFile);
-    model = modelName;
-else
-    model = import_dume_simscape();
+    if ~isfile(sourceModelFile)
+        save_system(sourceModelName, sourceModelFile);
+    end
 end
 
+[~, liveToken] = fileparts(tempname);
+liveModelName = ['dum_e_simscape_live_' ...
+    regexprep(liveToken, '[^A-Za-z0-9_]', '_')];
+liveModelFile = fullfile(tempdir, [liveModelName '.slx']);
+copyfile(sourceModelFile, liveModelFile);
+liveModelCleanup = onCleanup(@() ...
+    closeAndDeleteLiveModel(liveModelName, liveModelFile));
+load_system(liveModelFile);
+model = liveModelName;
+
+removeGripperLoopConstraints(model);
 set_param([model '/MechanismConfiguration'], 'GravityVector', '[0 0 0]');
 configureContinuousInputs(model, jointNames, initialPose, stateFile, ...
-    gripperClosedDeg, gripperOpenDeg, moveDuration);
+    gripperClosedDeg, gripperOpenDeg, gripperFingerOpenDeg, moveDuration);
 set_param(model, ...
     'StopTime', sprintf('%.9g', stopTime), ...
     'EnablePacing', 'on', ...
@@ -79,10 +109,11 @@ set_param(model, ...
 open_system(model);
 fprintf(['Starting one continuous Simscape run; DUM-E poses are sampled from:\n%s\n' ...
     'Gripper 0-100%% maps to the v2 servo range %.0f to %.0f degrees.\n' ...
+    'Live finger pivots move independently through %.0f degrees to avoid loop-closure failures.\n' ...
     'Simulation waits between poses and paces each move for visible animation over %.2f simulated seconds.\n' ...
     'Gravity is disabled for stable live pose tracking.\n' ...
     'Press Ctrl+C in MATLAB to stop.\n'], ...
-    stateFile, gripperClosedDeg, gripperOpenDeg, moveDuration);
+    stateFile, gripperClosedDeg, gripperOpenDeg, gripperFingerOpenDeg, moveDuration);
 sim(model);
 end
 
@@ -98,7 +129,7 @@ end
 
 function configureContinuousInputs( ...
         model, jointNames, initialPose, stateFile, ...
-        gripperClosedDeg, gripperOpenDeg, moveDuration)
+        gripperClosedDeg, gripperOpenDeg, gripperFingerOpenDeg, moveDuration)
 removeOldPoseInputs(model, jointNames);
 
 for k = 1:numel(jointNames)
@@ -140,16 +171,17 @@ set_param([model '/DumeLivePoseSource'], ...
     'SampleTime', '0.02', ...
     'MoveDuration', sprintf('%.16g', moveDuration), ...
     'GripperClosedDeg', sprintf('%.16g', gripperClosedDeg), ...
-    'GripperOpenDeg', sprintf('%.16g', gripperOpenDeg));
+    'GripperOpenDeg', sprintf('%.16g', gripperOpenDeg), ...
+    'GripperFingerOpenDeg', sprintf('%.16g', gripperFingerOpenDeg));
 
 add_block('simulink/Sources/Clock', [model '/DumeLiveClock'], ...
     'Position', [570 90 600 120]);
 add_block('simulink/Signal Routing/Demux', [model '/DumeSplitPosition'], ...
-    'Outputs', '6', 'Position', [890 75 895 190]);
+    'Outputs', num2str(numel(jointNames)), 'Position', [890 75 895 190]);
 add_block('simulink/Signal Routing/Demux', [model '/DumeSplitVelocity'], ...
-    'Outputs', '6', 'Position', [890 215 895 330]);
+    'Outputs', num2str(numel(jointNames)), 'Position', [890 215 895 330]);
 add_block('simulink/Signal Routing/Demux', [model '/DumeSplitAcceleration'], ...
-    'Outputs', '6', 'Position', [890 355 895 470]);
+    'Outputs', num2str(numel(jointNames)), 'Position', [890 355 895 470]);
 add_block('simulink/Discrete/Unit Delay', [model '/DumeHoldPosition'], ...
     'Position', [925 90 965 120]);
 add_block('simulink/Discrete/Unit Delay', [model '/DumeHoldVelocity'], ...
@@ -158,8 +190,8 @@ add_block('simulink/Discrete/Unit Delay', [model '/DumeHoldAcceleration'], ...
     'Position', [925 370 965 400]);
 set_param([model '/DumeHoldPosition'], ...
     'InitialCondition', mat2str(initialPose, 16));
-set_param([model '/DumeHoldVelocity'], 'InitialCondition', 'zeros(6,1)');
-set_param([model '/DumeHoldAcceleration'], 'InitialCondition', 'zeros(6,1)');
+set_param([model '/DumeHoldVelocity'], 'InitialCondition', 'zeros(9,1)');
+set_param([model '/DumeHoldAcceleration'], 'InitialCondition', 'zeros(9,1)');
 
 clockPorts = get_param([model '/DumeLiveClock'], 'PortHandles');
 sourcePorts = get_param([model '/DumeLivePoseSource'], 'PortHandles');
@@ -221,5 +253,52 @@ for k = 1:numel(oldNames)
     if any(strcmp(blocks, oldNames{k}))
         delete_block([model '/' oldNames{k}]);
     end
+end
+end
+
+function removeGripperLoopConstraints(model)
+closureNames = {
+    'cad_closure_rod_1_finger_1_joint'
+    'cad_closure_rod_2_finger_3_joint'
+    'cad_closure_rod_3_finger_2_joint'
+};
+blocks = get_param(model, 'Blocks');
+for k = 1:numel(closureNames)
+    if any(strcmp(blocks, closureNames{k}))
+        delete_block([model '/' closureNames{k}]);
+    end
+end
+
+closureLinks = {
+    'gripper_connecting_rod_1_1'
+    'gripper_finger_1_1'
+    'gripper_connecting_rod_2_1'
+    'gripper_finger_3_1'
+    'gripper_connecting_rod_3_1'
+    'gripper_finger_2_1'
+};
+for k = 1:numel(closureLinks)
+    for blockName = {'ClosurePort','ClosureTransform'}
+        block = [model '/' closureLinks{k} '/' blockName{1}];
+        if getSimulinkBlockHandle(block) ~= -1
+            delete_block(block);
+        end
+    end
+end
+end
+
+function closeAndDeleteLiveModel(model, modelFile)
+if bdIsLoaded(model)
+    if ~strcmp(get_param(model, 'SimulationStatus'), 'stopped')
+        set_param(model, 'SimulationCommand', 'stop');
+    end
+    close_system(model, 0);
+end
+if isfile(modelFile)
+    delete(modelFile);
+end
+autosaveFile = [modelFile '.autosave'];
+if isfile(autosaveFile)
+    delete(autosaveFile);
 end
 end

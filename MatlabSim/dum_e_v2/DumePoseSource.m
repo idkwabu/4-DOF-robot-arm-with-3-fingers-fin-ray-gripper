@@ -5,6 +5,7 @@ classdef DumePoseSource < matlab.System
         MoveDuration = 0.5
         GripperClosedDeg = -120
         GripperOpenDeg = 65
+        GripperFingerOpenDeg = 40
     end
 
     properties (Access = private)
@@ -28,11 +29,10 @@ classdef DumePoseSource < matlab.System
                     'SampleTime and MoveDuration must be positive.');
             end
 
-            obj.TargetPose = read_dume_pose( ...
-                obj.StateFile, obj.GripperClosedDeg, obj.GripperOpenDeg);
+            obj.TargetPose = readTargetPose(obj);
             obj.StartPose = obj.TargetPose;
-            obj.StartVelocity = zeros(6,1);
-            obj.StartAcceleration = zeros(6,1);
+            obj.StartVelocity = zeros(size(obj.TargetPose));
+            obj.StartAcceleration = zeros(size(obj.TargetPose));
             obj.StartTime = -obj.MoveDuration;
             updateCoefficients(obj);
         end
@@ -42,8 +42,7 @@ classdef DumePoseSource < matlab.System
             if simTime - obj.StartTime >= obj.MoveDuration
                 newTarget = waitForTargetChange(obj);
             else
-                newTarget = read_dume_pose( ...
-                    obj.StateFile, obj.GripperClosedDeg, obj.GripperOpenDeg);
+                newTarget = readTargetPose(obj);
             end
             if any(abs(newTarget - obj.TargetPose) > 1e-10)
                 obj.StartPose = position;
@@ -62,9 +61,9 @@ classdef DumePoseSource < matlab.System
         end
 
         function [size1, size2, size3] = getOutputSizeImpl(~)
-            size1 = [6 1];
-            size2 = [6 1];
-            size3 = [6 1];
+            size1 = [9 1];
+            size2 = [9 1];
+            size3 = [9 1];
         end
 
         function [type1, type2, type3] = getOutputDataTypeImpl(~)
@@ -89,13 +88,20 @@ classdef DumePoseSource < matlab.System
     methods (Access = private)
         function newTarget = waitForTargetChange(obj)
             while true
-                newTarget = read_dume_pose( ...
-                    obj.StateFile, obj.GripperClosedDeg, obj.GripperOpenDeg);
+                newTarget = readTargetPose(obj);
                 if any(abs(newTarget - obj.TargetPose) > 1e-10)
                     return;
                 end
                 pause(obj.SampleTime);
             end
+        end
+
+        function pose = readTargetPose(obj)
+            [pose, state] = read_dume_pose( ...
+                obj.StateFile, obj.GripperClosedDeg, obj.GripperOpenDeg);
+            fingerAngle = deg2rad( ...
+                obj.GripperFingerOpenDeg*(state.gripper/100));
+            pose = [pose; repmat(fingerAngle, 3, 1)];
         end
 
         function updateCoefficients(obj)
@@ -114,8 +120,8 @@ classdef DumePoseSource < matlab.System
             elapsed = simTime - obj.StartTime;
             if elapsed >= duration
                 position = obj.TargetPose;
-                velocity = zeros(6,1);
-                acceleration = zeros(6,1);
+                velocity = zeros(size(obj.TargetPose));
+                acceleration = zeros(size(obj.TargetPose));
                 return;
             end
 

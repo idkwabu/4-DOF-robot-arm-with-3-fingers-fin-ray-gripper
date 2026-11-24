@@ -19,16 +19,23 @@ and Simscape Mechanics Explorer, then follows
 `D:\Dum-E\robot_state.json` in one continuous simulation. It waits at the
 current pose while the file is unchanged, then paces each new move for visible
 animation over 0.5 simulated seconds without restarting the simulation. State
-changes during a move retarget the trajectory smoothly. The live follower
-disables gravity because the
-preliminary passive gripper linkage can lose its loop closure under gravity;
-the importer itself still sets Y-up gravity to `[0 -9.80665 0] m/s^2`.
+changes during a move retarget the trajectory smoothly. To avoid the CAD
+gripper loops failing during motion, live mode temporarily removes the three
+rod-to-finger closure joints and drives the three finger pivots independently
+through 0-40 degrees. The rods therefore are not mechanically linked to the
+fingers during live animation. Live mode runs in a temporary copy of the
+generated model, so the imported model retains its full CAD linkage. Live
+mode also disables gravity because the preliminary passive gripper linkage
+can lose its loop closure under gravity; the importer itself still sets Y-up
+gravity to `[0 -9.80665 0] m/s^2`.
 Press **Ctrl+C** in MATLAB to stop.
 
 If DUM-E is already open, use `follow_dume_v2(false)`. The optional second
 argument sets simulation duration, and the third adjusts animation duration,
 e.g. `follow_dume_v2(false, 120, 0.5)`. The default run waits for state
-changes until stopped.
+changes until stopped. An optional fourth argument can select a different
+pose JSON file, e.g.
+`follow_dume_v2(false, 120, 0.5, 'D:\Dum-E\test_pose.json')`.
 
 ### Pose mapping
 
@@ -89,6 +96,7 @@ run.
 | `import_dume_simscape.m` | Imports the URDF and adds the gripper closure joints |
 | `follow_dume_v2.m` | Opens the GUI and continuously follows DUM-E |
 | `follow_dume_v2_snapshot.m` | Reads one pose and runs a finite simulation |
+| `add_dume_v2_gripper_closures.m` | Restores the CAD gripper loop joints |
 | `DumePoseSource.m` | Polls the pose file and generates smooth joint trajectories |
 | `read_dume_pose.m` | Validates and maps DUM-E pose values to Simscape radians |
 | `run_dume_v2_simulation.m` | Sets a one-time static joint target pose |
