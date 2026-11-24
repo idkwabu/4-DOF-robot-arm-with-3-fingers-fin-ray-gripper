@@ -24,6 +24,13 @@ mind/robot_command.json
 robot_state.json
 robot_command.json
 
+# Generated MATLAB/Simscape models. Rebuilt from the URDF on demand.
+MatlabSim/dum_e_v2/dum_e_simscape_generated.slx
+MatlabSim/dum_e_v2/dum_e_simscape_live.slx
+MatlabSim/dum_e_v2/dum_e_simscape_live_*.slx
+MatlabSim/dum_e_v3/dum_e_v3_generated.slx
+MatlabSim/dum_e_v3/dum_e_v3_live.slx
+
 # Editor and OS noise
 .vscode/
 .idea/

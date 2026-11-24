@@ -1352,16 +1352,24 @@ class DumEApp:
             suffix = "%" if key == "gripper" else " deg"
             self.pose_labels[key].configure(text=f"{self.state[key]:g}{suffix}")
 
-    def _persist_visual_pose(self) -> None:
-        if self._angles is None:
+    def _persist_visual_pose(self, angles: Optional[JointAngles] = None,
+                             opening: Optional[float] = None) -> None:
+        resolved_angles = self._angles if angles is None else angles
+        if resolved_angles is None:
             return
+        if opening is None:
+            opening = (
+                self._opening
+                if angles is None and self._opening is not None
+                else self.cfg.gripper_opening
+            )
         pose = {
-            "base": self._angles.theta_base,
-            "joint1": self._angles.joint1,
-            "joint2": self._angles.joint2,
-            "joint3": self._angles.joint3,
-            "gripper_roll": self._angles.gripper_roll,
-            "gripper": 100.0 * self._opening,
+            "base": resolved_angles.theta_base,
+            "joint1": resolved_angles.joint1,
+            "joint2": resolved_angles.joint2,
+            "joint3": resolved_angles.joint3,
+            "gripper_roll": resolved_angles.gripper_roll,
+            "gripper": 100.0 * opening,
         }
         save_pose_state(pose)
         self.state = pose
@@ -1511,8 +1519,10 @@ class DumEApp:
         except ValueError as exc:
             messagebox.showerror("DUM-E", str(exc))
             return
+        # Persist the solved/entered target before any redraw; plotting is not
+        # a motion step and must not gate the state file.
+        self._persist_visual_pose(angles, opening)
         self._draw(angles, opening=opening, target=target)
-        self._persist_visual_pose()
 
     def _viz_clear(self) -> None:
         self.viz_ax.clear()
@@ -1536,13 +1546,15 @@ class DumEApp:
         except ValueError as exc:
             messagebox.showerror("DUM-E", str(exc))
             return
+        # The target is the arm's commanded pose. Save it immediately, before
+        # interpolation or the first animation frame begins.
+        self._persist_visual_pose(goal, opening)
         start = self._angles or state_to_angles(self.state)
         start_opening = (self._opening if self._opening is not None
                          else self.cfg.gripper_opening)
         target_opening = self.cfg.gripper_opening if opening is None else opening
         if _same_pose(start, goal) and abs(target_opening - start_opening) <= 1e-6:
             self._draw(goal, opening, target)
-            self._persist_visual_pose()
             messagebox.showinfo(
                 "DUM-E",
                 "Start and target poses are identical, so there is nothing to\n"
@@ -1591,7 +1603,6 @@ class DumEApp:
         self._anim_job = None
         self.viz_anim_btn.configure(text="Animate")
         self.viz_plot_btn.configure(state="normal")
-        self._persist_visual_pose()
 
     def _goto_viz_angles(self, angles: JointAngles, opening=None, target=None,
                          animate: bool = False, from_opening=None) -> None:

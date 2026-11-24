@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import math
 import tkinter as tk
+from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Optional
 
@@ -52,6 +54,34 @@ DEFAULT_CFG = ra.RobotConfig()
 
 VIZ_ANIM_FRAMES = 30
 VIZ_ANIM_INTERVAL_MS = 30
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+MIND_STATE_FILE = BASE_DIR / "mind" / "robot_state.json"
+ROOT_STATE_FILE = BASE_DIR / "robot_state.json"
+
+
+def _write_state(path: Path, state: dict) -> None:
+    temp = path.with_name(path.name + ".tmp")
+    with temp.open("w", encoding="utf-8") as fp:
+        json.dump(state, fp, indent=2)
+        fp.write("\n")
+        fp.flush()
+    temp.replace(path)
+
+
+def _persist_pose(angles: ra.JointAngles, opening: Optional[float],
+                  config: ra.RobotConfig) -> None:
+    effective_opening = config.gripper_opening if opening is None else opening
+    state = {
+        "base": angles.theta_base,
+        "joint1": angles.joint1,
+        "joint2": angles.joint2,
+        "joint3": angles.joint3,
+        "gripper_roll": angles.gripper_roll,
+        "gripper": 100.0 * effective_opening,
+    }
+    _write_state(MIND_STATE_FILE, state)
+    _write_state(ROOT_STATE_FILE, state)
 
 
 def _same_pose(a: ra.JointAngles, b: ra.JointAngles, tol: float = 1e-3) -> bool:
@@ -214,6 +244,7 @@ class RobotArmApp:
         except ValueError as exc:
             self.fk_out.show(f"ERROR\n{exc}")
             return
+        _persist_pose(ra.JointAngles(tb, j1, j2, j3, roll), opening, self.cfg)
         eff = self.cfg.gripper_opening if opening is None else opening
         lines = [
             f"Grip point      : ({p.x:9.3f}, {p.y:9.3f}, {p.z:9.3f}) mm   "
@@ -295,6 +326,7 @@ class RobotArmApp:
         except ValueError as exc:
             self.ik_out.show(f"ERROR\n{exc}")
             return
+        _persist_pose(a, opening, self.cfg)
         back = ra.forward_kinematics(a.theta_base, a.joint1, a.joint2, a.joint3, self.cfg, opening)
         err = ((back.x - x) ** 2 + (back.y - y) ** 2 + (back.z - z) ** 2) ** 0.5
         ok = ra.check_joint_limits(
@@ -505,6 +537,7 @@ class RobotArmApp:
         except ValueError as exc:
             messagebox.showerror("DUM-E", str(exc))
             return
+        _persist_pose(angles, opening, self.cfg)
         self._draw(angles, target, opening)
 
     def _viz_clear(self) -> None:
@@ -532,6 +565,7 @@ class RobotArmApp:
         except ValueError as exc:
             messagebox.showerror("DUM-E", str(exc))
             return
+        _persist_pose(to_angles, opening, self.cfg)
         start = self._current_angles or ra.HOME_ANGLES
         start_opening = (self._current_opening if self._current_opening is not None
                          else self.cfg.gripper_opening)
@@ -598,6 +632,7 @@ class RobotArmApp:
         self.v_roll_ang.var.set(f"{angles.gripper_roll:.3f}")
         self.v_open_a.var.set("" if opening is None else f"{opening:.3f}")
         self.notebook.select(self.viz_tab_index)
+        _persist_pose(angles, opening, self.cfg)
         self._draw(angles, target, opening)
 
 

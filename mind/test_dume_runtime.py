@@ -180,14 +180,14 @@ class DumERuntimeTests(unittest.TestCase):
         app = SimpleNamespace(
             _resolve_viz_pose=lambda: (angles, None, 0.25),
             _draw=lambda *args, **kwargs: calls.append("draw"),
-            _persist_visual_pose=lambda: calls.append("persist"),
+            _persist_visual_pose=lambda *args, **kwargs: calls.append("persist"),
             _anim_job="job",
             viz_anim_btn=SimpleNamespace(configure=lambda **kwargs: None),
             viz_plot_btn=SimpleNamespace(configure=lambda **kwargs: None),
         )
         dume.DumEApp._do_viz_plot(app)
         dume.DumEApp._anim_finish(app)
-        self.assertEqual(calls, ["draw", "persist", "persist"])
+        self.assertEqual(calls, ["persist", "draw"])
 
     def test_auto_ik_keeps_the_requested_elbow_branch(self):
         target = dume.forward_kinematics(dume.HOME_ANGLES)
