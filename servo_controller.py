@@ -79,10 +79,21 @@ def main() -> int:
                     connection.write((",".join(map(str, positions)) + "\n").encode("ascii"))
                     connection.flush()
                     response = connection.readline().decode("ascii", errors="replace").strip()
-                    if response != "OK":
+                    if response == "OK":
+                        echo = None
+                    elif response.startswith("OK,"):
+                        echo = response[3:]
+                        expected = ",".join(map(str, positions))
+                        if echo != expected:
+                            raise RuntimeError(
+                                f"Arduino echoed {echo!r}, expected {expected!r}."
+                            )
+                    else:
                         raise RuntimeError(f"Arduino rejected pose (response: {response!r}).")
                     last_signature = signature
                     print(f"Sent servo positions: {', '.join(map(str, positions))}")
+                    if echo is not None:
+                        print(f"Arduino echo: {echo}")
                 time.sleep(args.poll)
     except KeyboardInterrupt:
         print("\nStopped.")
